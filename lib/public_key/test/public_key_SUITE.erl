@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -621,8 +621,8 @@ pkix(Config) when is_list(Config) ->
 		 [[{'AttributeTypeAndValue', {2,5,4,3},{printableString,"ERLANGCA"}}],
 		  [{'AttributeTypeAndValue', {2,5,4,3},{printableString," erlang  ca "}}]]},
     VerifyStr = {rdnSequence, 
-		 [[{'AttributeTypeAndValue', {2,5,4,3},{printableString,"erlang ca"}}],
-		  [{'AttributeTypeAndValue', {2,5,4,3},{printableString,"erlangca"}}]]},
+		 [[{'AttributeTypeAndValue', {2,5,4,3},{printableString,"erlangca"}}],
+		  [{'AttributeTypeAndValue', {2,5,4,3},{printableString,"erlang ca"}}]]},
     VerifyStr = public_key:pkix_normalize_name(TestStr),
 
     ok.
