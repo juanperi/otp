@@ -54,7 +54,5 @@ end_per_testcase(_TestCase, Config) ->
 %%--------------------------------------------------------------------
 
 handshake_encode_decode(Config) when is_list(Config) ->
-    Result = eqc:quickcheck(
-	       ssl_eqc_handshake_encode_decode:prop_ssl_decode_encode()),
-    ct:pal("~p", [Result]),
-    true = Result.
+    true = eqc:quickcheck(
+	     ssl_eqc_handshake_encode_decode:prop_ssl_decode_encode()).

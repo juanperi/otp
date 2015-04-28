@@ -54,7 +54,9 @@
 -endif.
 
 -include_lib("ssl/src/tls_handshake.hrl").
+-include_lib("ssl/src/ssl_handshake.hrl").
 -include_lib("ssl/src/ssl_alert.hrl").
+-include_lib("ssl/src/ssl_internal.hrl").
 
 %%--------------------------------------------------------------------
 %% Properties --------------------------------------------------------
@@ -76,34 +78,52 @@ prop_ssl_decode_encode() ->
 
 ssl_msg() ->
     ?LET(M, oneof([{#hello_request{}, handshake_type(hello_request)},
-                   {#client_hello{}, handshake_type(client_hello)}]), M).
+                   {#client_hello{}, handshake_type(client_hello)},
+		   {#server_hello{}, handshake_type(server_hello)}
+		  ]), M).
 
 msg_data(Version) ->
-    SSLV2Hello = ssl_v2_hello(Version),
-    ?LET(M,oneof([<<>>, SSLV2Hello]), M).
+    Msgs = [MsgData || MsgData <- [hello_request(), ssl_v2client_hello(Version),
+				   ssl_server_hello(Version)]],
+    ?LET(M,oneof(Msgs), M).
 
-ssl_v2_hello({Major, Minor} = Version) ->
+hello_request() ->
+    <<>>.
+
+ssl_v2client_hello({Major, Minor} = Version) ->
     <<SuiteLen:16/unsigned-big-integer, Suites/binary>> = cipher_suites(Version),
     ?LET({ChallengeDataLen, ChallengeData},  challange_data(),
          <<Major:8/unsigned-big-integer, Minor:8/unsigned-big-integer,
            SuiteLen:16/unsigned-big-integer, 0:16/unsigned-big-integer, ChallengeDataLen:16/unsigned-big-integer, 
            Suites/binary, ChallengeData/binary>>).
-
 challange_data() ->
     ?LET(Len, uint16(), 
          ?LET(Data, challange_data(Len), {Len, Data})).
 challange_data(Len) ->
     crypto:rand_bytes(Len).
         
+ssl_server_hello({Major, Minor} = Version) ->
+    Comp_method = comp_method(Version),
+    Session_ID = session_id(Version),
+    Random =  crypto:rand_bytes(32),
+    SID_length = size(Session_ID),
+    ?LET(Cipher_suite, cipher_suite(Version),
+	 <<Major:8/unsigned-big-integer, Minor:8/unsigned-big-integer, Random/binary,
+	   SID_length:8/unsigned-big-integer, Session_ID:SID_length/binary,
+	   Cipher_suite:2/binary, Comp_method:8/unsigned-big-integer>>).
 
 handshake_type(hello_request) ->
-    0;
-handshake_type(0) ->
+    ?HELLO_REQUEST;
+handshake_type(?HELLO_REQUEST) ->
     hello_request;
 handshake_type(client_hello) ->
-    1;
-handshake_type(1) ->
-    client_hello.
+    ?CLIENT_HELLO;
+handshake_type(?CLIENT_HELLO) ->
+    client_hello;
+handshake_type(server_hello) ->
+    ?SERVER_HELLO;
+handshake_type(?SERVER_HELLO) ->
+    server_hello.
  
 uint16() ->
     gen_byte(2).
@@ -114,8 +134,18 @@ gen_byte(N) when N>0 ->
 gen_byte() ->
     choose(0,255).
 
-cipher_suites(SSlVersion) ->
-    Suites = ssl_cipher:suites(SSlVersion),
+cipher_suites(SslVersion) ->
+    Suites = ssl_cipher:suites(SslVersion),
     BinSuites = list_to_binary(Suites),
     Len = byte_size(BinSuites),
     <<Len:16/unsigned-big-integer, BinSuites/binary>>.
+
+cipher_suite(SslVersion) ->
+    Suites = ssl_cipher:suites(SslVersion),
+    lists:nth(random:uniform(length(Suites)), Suites).
+
+comp_method(_SslVersion) -> 
+    ?NULL.
+
+session_id(_SslVersion) ->
+    crypto:rand_bytes(?NUM_OF_SESSION_ID_BYTES).
