@@ -54,7 +54,7 @@
 
       <p>Pipelining is only used if the pipeline
       time-out is set, otherwise persistent connections without
-      pipelining are used. For example, the client always waits for
+      pipelining are used. That is, the client always waits for
       the previous response before sending the next request.</p>
     </note>
     <p>Some examples are provided in the <seealso
