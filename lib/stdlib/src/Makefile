@@ -84,6 +84,7 @@ MODULES= \
 	gen \
 	gen_event \
 	gen_fsm \
+	gen_stm \
 	gen_server \
 	io \
 	io_lib \
