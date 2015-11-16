@@ -319,27 +319,12 @@ handle_call({unconditionally_clear_pem_cache, _},_, #state{certificate_db = [_,_
 %%
 %% Description: Handling cast messages
 %%--------------------------------------------------------------------
-handle_cast({register_session, Host, Port, Session}, 
-	    #state{session_cache_client = Cache,
-		   session_cache_cb = CacheCb} = State) ->
-    TimeStamp = erlang:monotonic_time(),
-    NewSession = Session#session{time_stamp = TimeStamp},
-    
-    case CacheCb:select_session(Cache, {Host, Port}) of
-	no_session ->
-	    CacheCb:update(Cache, {{Host, Port}, 
-				   NewSession#session.session_id}, NewSession);
-	Sessions ->
-	    register_unique_session(Sessions, NewSession, CacheCb, Cache, {Host, Port})
-    end,
+handle_cast({register_session, Host, Port, Session}, State0) ->
+    State = ssl_client_register_session(Host, Port, Session, State0) 
     {noreply, State};
 
-handle_cast({register_session, Port, Session},  
-	    #state{session_cache_server = Cache,
-		   session_cache_cb = CacheCb} = State) ->    
-    TimeStamp =  erlang:monotonic_time(),
-    NewSession = Session#session{time_stamp = TimeStamp},
-    CacheCb:update(Cache, {Port, NewSession#session.session_id}, NewSession),
+handle_cast({register_session, Port, Session}, State0) ->    
+    State = server_register_session(Port, Session, State0), 		       
     {noreply, State};
 
 handle_cast({invalidate_session, Host, Port,
@@ -643,3 +628,29 @@ crl_db_info([_,_,_,Local], {internal, Info}) ->
 crl_db_info(_, UserCRLDb) ->
     UserCRLDb.
 
+
+ssl_client_register_session(Host, Port, Session, #state{session_cache_client = Cache,
+		   session_cache_cb = CacheCb} = State) ->
+    TimeStamp = erlang:monotonic_time(),
+    NewSession = Session#session{time_stamp = TimeStamp},
+    
+    case CacheCb:select_session(Cache, {Host, Port}) of
+	no_session ->
+	    CacheCb:update(Cache, {{Host, Port}, 
+				   NewSession#session.session_id}, NewSession);
+	Sessions ->
+	    register_unique_session(Sessions, NewSession, CacheCb, Cache, {Host, Port})
+    end,
+    State.
+
+server_register_session(Port, Session, #state{session_cache_server = Cache,
+		               session_cache_cb = CacheCb} = State) ->
+    TimeStamp =  erlang:monotonic_time(),
+    NewSession = Session#session{time_stamp = TimeStamp},
+    try CacheCb:size() of
+    N when N > Max ->
+      invalidate_cache();
+    _ ->
+    CacheCb:update(Cache, {Port, NewSession#session.session_id}, NewSession)	
+    end, 
+    State.
