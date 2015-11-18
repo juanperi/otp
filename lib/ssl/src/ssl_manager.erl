@@ -544,6 +544,39 @@ clean_cert_db(Ref, CertDb, RefDb, PemCache, File) ->
 	    ok
     end.
 
+ssl_client_register_session(Host, Port, Session, #state{session_cache_client = Cache,
+		   session_cache_cb = CacheCb} = State) ->
+    TimeStamp = erlang:monotonic_time(),
+    NewSession = Session#session{time_stamp = TimeStamp},
+    
+    case CacheCb:select_session(Cache, {Host, Port}) of
+	no_session ->
+	    do_register_session({{Host, Port}, 
+				     NewSession#session.session_id}, NewSession, Cache, CacheCb);
+	Sessions ->
+	    register_unique_session(Sessions, NewSession, CacheCb, Cache, {Host, Port})
+    end,
+    State.
+
+server_register_session(Port, Session, #state{session_cache_server = Cache,
+		               session_cache_cb = CacheCb} = State) ->
+    TimeStamp =  erlang:monotonic_time(),
+    NewSession = Session#session{time_stamp = TimeStamp},
+    do_register_session({Port, NewSession#session.session_id}, NewSession, Cache, CacheCb),	
+    State.
+
+
+do_register_session(Key, Session, Cache, CacheCb) ->
+  try CacheCb:size() of
+    N when N > Max ->
+      invalidate_session_cache(Cache, CacheCb);
+    _ ->	
+      CacheCb:update(Cache, Key, Session)
+    catch _:_ ->
+      CacheCb:update(Cache, Key, Session)	
+    end.
+
+
 %% Do not let dumb clients create a gigantic session table
 %% for itself creating big delays at connection time. 
 register_unique_session(Sessions, Session, CacheCb, Cache, PartialKey) ->
@@ -551,8 +584,8 @@ register_unique_session(Sessions, Session, CacheCb, Cache, PartialKey) ->
 	true ->
 	    ok;
 	false ->
-	    CacheCb:update(Cache, {PartialKey, 
-				   Session#session.session_id}, Session)
+	    do_register_session({PartialKey, 
+				   Session#session.session_id}, Session, Cache, CacheCb)
     end.
 
 exists_equivalent(_, []) ->
@@ -628,29 +661,5 @@ crl_db_info([_,_,_,Local], {internal, Info}) ->
 crl_db_info(_, UserCRLDb) ->
     UserCRLDb.
 
-
-ssl_client_register_session(Host, Port, Session, #state{session_cache_client = Cache,
-		   session_cache_cb = CacheCb} = State) ->
-    TimeStamp = erlang:monotonic_time(),
-    NewSession = Session#session{time_stamp = TimeStamp},
-    
-    case CacheCb:select_session(Cache, {Host, Port}) of
-	no_session ->
-	    CacheCb:update(Cache, {{Host, Port}, 
-				   NewSession#session.session_id}, NewSession);
-	Sessions ->
-	    register_unique_session(Sessions, NewSession, CacheCb, Cache, {Host, Port})
-    end,
-    State.
-
-server_register_session(Port, Session, #state{session_cache_server = Cache,
-		               session_cache_cb = CacheCb} = State) ->
-    TimeStamp =  erlang:monotonic_time(),
-    NewSession = Session#session{time_stamp = TimeStamp},
-    try CacheCb:size() of
-    N when N > Max ->
-      invalidate_cache();
-    _ ->
-    CacheCb:update(Cache, {Port, NewSession#session.session_id}, NewSession)	
-    end, 
-    State.
+invalidate_session_cache(CacheCb, Cache) ->
+    start_session_validator(Cache, CacheCb, 0).
