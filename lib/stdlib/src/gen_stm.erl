@@ -23,7 +23,7 @@
 -export(
    [start/3,start/4,start_link/3,start_link/4,
     stop/1,stop/3,
-    event/2,call/2,
+    send/2,event/2,call/2,
     enter_loop/4,enter_loop/5,enter_loop/6,
     reply/2]).
 
@@ -42,7 +42,7 @@
 
 %% Internal callbacks
 -export(
-   [wakeup_from_hibernate/6]).
+   [wakeup_from_hibernate/4]).
 
 %%% ---------------------------------------------------
 %%% Interface functions.
@@ -50,42 +50,51 @@
 
 -type from() :: {pid(), Tag :: term()}.
 -type state() :: atom().
--type data() :: term().
--type event() ::
-	{call, from(), term()} |
-	{event, term()} |
-	{info, term()}.
--type event_action() ::	ok | retry.
--type event_option() ::
-	{insert_events, [term()]} |
-	{cancel_timer, reference()} |
-	{demonitor, reference()} |
-	{unlink, pid() | port()} |
-	{filter, fun((term()) -> boolean())} |
-	hibernate.
+-type state_data() :: term().
+-type event_type() :: call | event | info.
+-type call_event_content() :: {from(), Request :: term()}.
+-type event_content() :: call_event_content() | term().
+-type remove_event_predicate() ::
+	fun((event_type(), event_content()) -> boolean()).
 -type reason() :: term().
+-type state_op() ::
+	retry |
+	hibernate |
+	{stop, reason()} |
+	{insert_event, event_type(), event_content()} |
+	{remove_event, event_type(), event_content()} |
+	{remove_event, remove_event_predicate()} |
+	{cancel_timer, TimerRef :: reference()} |
+	{demonitor, MonitorRef :: reference()} |
+	{unlink, Id :: pid() | port()}.
+-type process_dictionary() :: [{Key :: term(), Value :: term()}].
 
 %% This is not a state callback.  It is called only once and
 %% the server is not running until this function has returned
 %% an {ok, ...} tuple.  Thereafter the state callbacks are called
 %% for all events (messages) to this server.
 -callback init(Args :: term()) ->
-    {ok, InitialState :: state(), InitialData :: data()} |
-    {ok, InitialState :: state(), InitialData :: data(),
-     [event_option()]} |
+    {ok, state(), state_data()} |
+    {ok, state(), state_data(), [state_op()]} |
     ignore |
     {stop, reason()}.
 
 %% An example callback for state 'init'.
-%% Note that state callbacks and only state callbacks have arity 2
+%% Note that state callbacks and only state callbacks have arity 4
 %% and that is intentional.  I hope we can guarantee that.
--callback init(Event :: event(), Data :: data()) ->
-    {event_action(), NewState :: state(), NewData :: data()} |
-    {event_action(), NewState :: state(), NewData :: data(),
-     [event_option()]} |
-    {stop, reason(), NewData :: data()}.
+-callback init(
+	    PrevState :: state(),
+	    event_type(),
+	    event_content(),
+	    StateData :: state_data()) ->
+    [state_op()] |
+    {} |
+    {NewStateData :: state_data()} |
+    {NewState :: state(), NewStateData :: state_data()} |
+    {NewState :: state(), NewStateData :: state_data(), [state_op()]}.
 
-%% -callback handle_event(Event :: event(), State :: term(), Data :: term()) ->
+%% -callback handle_event(
+%% 	    Event :: event(), State :: term(), StateData :: term()) ->
 %%     {event_action(), NewState :: term(), NewData :: term()} |
 %%     {event_action(), NewState :: term(), NewData :: term(),
 %%      [event_option()]} |
@@ -95,27 +104,27 @@
 -callback terminate(
 	    Reason :: normal | shutdown | {shutdown, term()} | reason(),
 	    State :: state(),
-	    Data :: data()) ->
+	    StateData :: state_data()) ->
     any().
 
 -callback code_change(
-	    OldVsn :: term() | {down, term()},
+	    {OldVsn :: term() | {down, term()}, Extra :: term()},
 	    OldState :: state(),
-	    OldData :: data(),
-	    Extra :: term()) ->
-    {ok, State :: state(), Data :: data()} |
-    {ok, State :: state(), Data :: data(), [event_option()]}.
+	    OldStateData :: state_data()) ->
+    {ok, State :: state(), StateData :: state_data()} |
+    {ok, State :: state(), StateData :: state_data(), [state_op()]}.
 
 -callback format_status(
-	    StatusOption, ProcessDictionary,
-	    State :: state(), Data :: data()) ->
+	    StatusOption,
+	    [process_dictionary() |
+	     state() |
+	     state_data()]) ->
     Status :: term() when
-      StatusOption :: normal | terminate,
-      ProcessDictionary :: [{Key :: term(), Value :: term()}].
+      StatusOption :: normal | terminate.
 
 -optional_callbacks(
-   [format_status/4,
-    init/2]).
+   [format_status/2,
+    init/4]).
 
 
 %%%  -----------------------------------------------------------------
@@ -125,42 +134,46 @@
 start(Mod, Args, Options) ->
     gen:start(?MODULE, nolink, Mod, Args, Options).
 %%
-start(Name, Mod, Args, Options) ->
-    gen:start(?MODULE, nolink, Name, Mod, Args, Options).
+start(Server, Mod, Args, Options) ->
+    gen:start(?MODULE, nolink, Server, Mod, Args, Options).
 
 %% Start and link to a state machine
 start_link(Mod, Args, Options) ->
     gen:start(?MODULE, link, Mod, Args, Options).
 %%
-start_link(Name, Mod, Args, Options) ->
-    gen:start(?MODULE, link, Name, Mod, Args, Options).
+start_link(Server, Mod, Args, Options) ->
+    gen:start(?MODULE, link, Server, Mod, Args, Options).
 
 %% Stop a state machine
-stop(Name) ->
-    gen:stop(Name).
+stop(Server) ->
+    gen:stop(Server).
 %%
-stop(Name, Reason, Timeout) ->
-    gen:stop(Name, Reason, Timeout).
+stop(Server, Reason, Timeout) ->
+    gen:stop(Server, Reason, Timeout).
+
+%% Send an message to a state machine
+send({global,Name}, Msg) ->
+    try	global:send(Name, Msg) of
+	_ -> ok
+    catch
+	_:_ -> ok
+    end;
+send({via,Mod,Name}, Msg) ->
+    try	Mod:send(Name, Msg) of
+	_ -> ok
+    catch
+	_:_ -> ok
+    end;
+send({Name,Node} = Server, Msg) when is_atom(Name), is_atom(Node) ->
+    do_send(Server, Msg);
+send(Server, Msg) when is_atom(Server) ->
+    do_send(Server, Msg);
+send(Server, Msg) when is_pid(Server) ->
+    do_send(Server, Msg).
 
 %% Send an event to a state machine
-event({global,Name}, Event) ->
-    try	global:send(Name, event_msg(Event)) of
-	_ -> ok
-    catch
-	_:_ -> ok
-    end;
-event({via,Mod,Name}, Event) ->
-    try	Mod:send(Name, event_msg(Event)) of
-	_ -> ok
-    catch
-	_:_ -> ok
-    end;
-event({Name,Node} = Dest, Event) when is_atom(Name), is_atom(Node) ->
-    send(Dest, event_msg(Event));
-event(Dest, Event) when is_atom(Dest) ->
-    send(Dest, event_msg(Event));
-event(Dest, Event) when is_pid(Dest) ->
-    send(Dest, event_msg(Event)).
+event(Server, Event) ->
+    send(Server, event_msg(Event)).
 
 %% Call a state machine (synchronous; a reply is expected)
 call(Server, Request) ->
@@ -175,7 +188,7 @@ call(Server, Request) ->
 	      erlang:get_stacktrace())
     end.
 
-%% Reply from a state machine callback to who is waiting in call/2
+%% Reply from a state machine callback to whom awaits in call/2
 reply({To,Tag}, Reply) ->
     Msg = {Tag,Reply},
     try To ! Msg of
@@ -189,15 +202,15 @@ reply({To,Tag}, Reply) ->
 %% or start_link/3,4 turn the current process presumably
 %% started by proc_lib into a state machine supplying
 %% the same arguments as you would have returned from init/1
-enter_loop(Module, Options, State, Data) ->
-    enter_loop(Module, Options, State, Data, self()).
+enter_loop(Module, Options, State, StateData) ->
+    enter_loop(Module, Options, State, StateData, self()).
 %%
-enter_loop(Module, Options, State, Data, Server) ->
-    enter_loop(Module, Options, State, Data, Server, []).
+enter_loop(Module, Options, State, StateData, Server) ->
+    enter_loop(Module, Options, State, StateData, Server, []).
 %%
-enter_loop(Module, Options, State, Data, Server, EventOpts) ->
+enter_loop(Module, Options, State, StateData, Server, StateOps) ->
     Parent = gen:get_parent(),
-    enter(Module, Options, State, Data, Server, EventOpts, Parent).
+    enter(Module, Options, State, StateData, Server, StateOps, Parent).
 
 %%%  -----------------------------------------------------------------
 %%%  API helpers
@@ -206,10 +219,10 @@ event_msg(Event) ->
     {'$gen_event',Event}.
 
 %% Might actually not send the message
-send(Dest, Msg) ->
-    try erlang:send(Dest, Msg, [noconnect]) of
+do_send(Server, Msg) ->
+    try erlang:send(Server, Msg, [noconnect]) of
 	noconnect ->
-	    spawn(erlang, send, [Dest,Msg]),
+	    spawn(erlang, send, [Server,Msg]),
 	    ok;
 	ok ->
 	    ok
@@ -218,19 +231,19 @@ send(Dest, Msg) ->
 	    ok
     end.
 
-enter(Module, Options, State, Data, Server, EventOpts, Parent) ->
+enter(Module, Options, State, StateData, Server, StateOps, Parent) ->
     Name = gen:get_proc_name(Server),
     Debug = gen:debug_options(Name, Options),
-    %% S =
-    %% 	#state{
-    %% 	   module = Module,
-    %% 	   name = Name,
-    %% 	   state = State,
-    %% 	   queue = queue:new(),
-    %% 	   postponed = queue:new()},
+    S = #{
+      module => Module,
+      name => Name,
+      prev_state => '',
+      state => State,
+      state_data => StateData,
+      queue => [],
+      postponed => []},
     Hib = false,
-    continue(
-      Parent, Debug, [Module|Name], [State,[]], Data, Hib, EventOpts).
+    continue(Parent, Debug, S, Hib, StateOps).
 
 %%%  -----------------------------------------------------------------
 %%%  gen callbacks
@@ -253,12 +266,12 @@ init_it(Starter, Parent, Server, Module, Args, Options) ->
 
 init_result(Starter, Parent, Server, Module, Result, Options) ->
     case Result of
-	{ok,State,Data} ->
+	{ok,State,StateData} ->
 	    proc_lib:init_ack(Starter, {ok,self()}),
-	    enter(Module, Options, State, Data, Server, [], Parent);
-	{ok,State,Data,EventOpts} ->
+	    enter(Module, Options, State, StateData, Server, [], Parent);
+	{ok,State,StateData,StateOps} ->
 	    proc_lib:init_ack(Starter, {ok,self()}),
-	    enter(Module, Options, State, Data, Server, EventOpts, Parent);
+	    enter(Module, Options, State, StateData, Server, StateOps, Parent);
 	{stop,Reason} ->
 	    gen:unregister_name(Server),
 	    proc_lib:init_ack(Starter, {error,Reason}),
@@ -276,32 +289,31 @@ init_result(Starter, Parent, Server, Module, Result, Options) ->
 %%%  -----------------------------------------------------------------
 %%%  sys callbacks
 
-%% Misc = {ModNam,StateQP,Data}
-%% ModNam = [Module|Name]
-%% StateQP = [State,Queued|Postponed]
-
-
-%% -record(state, {module, name, state, queue, postponed}).
-%% %% The real state vs. sys is [#state{}|Data]
-%% %% where Data is the callback module's state
-
-system_continue(Parent, Debug, {ModNam,StateQP,Data}) ->
+system_continue(Parent, Debug, S) ->
     Hib = false,
-    continue(Parent, Debug, ModNam, StateQP, Data, Hib).
+    continue(Parent, Debug, S, Hib).
 
-system_terminate(Reason, _Parent, Debug, {ModNam,StateQP,Data}) ->
-    terminate(Reason, Debug, ModNam, StateQP, Data).
+system_terminate(Reason, _Parent, Debug, S) ->
+    terminate(Reason, Debug, S).
 
 system_code_change(
-  {[Module|_Name] = ModNam,[State|QP],Data}, _Mod, OldVsn, Extra) ->
+  #{module := Module,
+    prev_state := Pstate,
+    state := State,
+    state_data := StateData} = S,
+  _Mod, OldVsn, Extra) ->
     case
-	try Module:code_change(OldVsn, State, Data, Extra)
+	try Module:code_change(OldVsn, {Pstate, State, StateData}, Extra)
 	catch
 	    Result -> Result
 	end
     of
-	{ok,NewState,NewData} ->
-	    {ok,{ModNam,[NewState|QP],NewData}};
+	{ok,{NewPstate,NewState,NewStateData}} ->
+	    {ok,
+	     S#{
+	       prev_state := NewPstate,
+	       state := NewState,
+	       state_data := NewStateData}};
 	BadResult ->
 	    {bad_return_value,BadResult}
     end.
@@ -309,16 +321,20 @@ system_code_change(
 
 %% The state we show to sys tools is a 2-tuple, not a pair
 %% to not scare people
-system_get_state({_ModNam,[State|_QP],Data}) ->
-    {ok,{State,Data}}.
+system_get_state(#{state := State, state_data := StateData}) ->
+    {ok,{State,StateData}}.
 
-system_replace_state(StateFun, {ModNam,[State|QP],Data}) ->
-    {NewState,NewData} = Result = StateFun({State,Data}),
-    {ok,Result,{ModNam,[NewState|QP],NewData}}.
+system_replace_state(
+  StateFun,
+  #{state := State,
+    state_data := StateData} = S) ->
+    {NewState,NewStateData} = Result = StateFun({State,StateData}),
+    {ok,Result,S#{state := NewState, state_data := NewStateData}}.
 
 format_status(
   Opt,
-  [PDict,SysState,Parent,Debug,{[Module|Name],[State,Q|P],Data}]) ->
+  [PDict,SysState,Parent,Debug,
+   #{name := Name, queue := Q, postponed := P} = S]) ->
     Header = gen:format_status_header("Status for state machine", Name),
     Log = sys:get_debug(log, Debug, []),
     [{header,Header},
@@ -328,7 +344,7 @@ format_status(
        {"Logged Events",Log},
        {"Queue",Q},
        {"Postponed",P}]} |
-     case format_status(Opt, PDict, State, Data, Module) of
+     case format_status(Opt, PDict, S) of
 	 L when is_list(L) -> L;
 	 T -> [T]
      end].
@@ -337,124 +353,169 @@ format_status(
 %% Format debug messages.  Print them as the call-back module sees
 %% them, not as the real erlang messages.  Use trace for that.
 %%-----------------------------------------------------------------
-print_event(Dev, {in, Msg}, {Name,State}) ->
-    case Msg of
-	{call,{From,_Tag},Call} ->
-	    io:format(
-	      Dev, "*DBG* ~p received call ~p from ~w in state ~w~n",
-	      [Name,Call,From,State]);
-	{Tag,Event}
-	  when Tag =:= event;
-	       Tag =:= info ->
-	    io:format(
-	      Dev, "*DBG* ~p received ~w ~p in state ~w~n",
-	      [Name,Tag,Event,State]);
-	{Tag,Event,NewState}
-	  when Tag =:= ok;
-	       Tag =:= retry ->
-	    io:format(
-	      Dev, "*DBG* ~p returned ~w ~p in state ~w => ~w~n",
-	      [Name,Tag,Event,State,NewState]);
-	_ ->
-	    io:format(
-	      Dev, "*DBG* ~p received ~p in state ~w~n",
-	      [Name,Msg,State])
+print_event(Dev, {in,Event}, {Name,_State}) ->
+    io:format(
+      Dev, "*DBG* ~p received ~s~n",
+      [Name,event_string(Event)]);
+print_event(Dev, {out,Reply,{To,_Tag}}, {Name,_State}) ->
+    io:format(
+      Dev, "*DBG* ~p sent ~p to ~p~n",
+      [Name,Reply,To]);
+print_event(Dev, {Tag,Event,NewState}, {Name,State}) ->
+    StateString =
+	case NewState of
+	    State ->
+		io_lib:format("~p", [State]);
+	    _ ->
+		io_lib:format("~p => ~p", [State,NewState])
+	end,
+    io:format(
+      Dev, "*DBG* ~p ~w ~s in state ~s~n",
+      [Name,Tag,event_string(Event),StateString]).
+
+event_string(Event) ->
+    case Event of
+	{call,{{From,_Tag},Request}} ->
+	    io_lib:format("call ~p from ~w", [Request,From]);
+	{Tag,Content} ->
+	    io_lib:format("~w ~p", [Tag,Content])
     end.
+
 
 %%%  -----------------------------------------------------------------
 %%%  Internal callbacks
 
-wakeup_from_hibernate(
-  Parent, Debug, ModNam, StateQP, Data, EventOpts) ->
+wakeup_from_hibernate(Parent, Debug, S, StateOps) ->
     Hib = true,
     %% We need to keep this Hib flag around until receive
-    continue(Parent, Debug, ModNam, StateQP, Data, Hib, EventOpts).
+    continue(Parent, Debug, S, Hib, StateOps).
 
 %%%  -----------------------------------------------------------------
 %%%  Implementation
 
-%% The internal state is split over 3 arguments [Mod|Name] = ModNam,
-%% [State,Q|P] = StateQP, Data to minimize term rebuild and
-%% hereby garbage collect load
-
-%% Loop over EventOpts before continuing
+%% Loop over StateOps before continuing
 continue(
-  Parent, Debug, ModNam, StateQP, Data, Hib, [EventOpt|EventOpts]) ->
-    case EventOpt of
+  Parent, Debug, #{queue := Q} = S, Hib, [StateOp|StateOps]) ->
+    case StateOp of
+	retry ->
+	    %% Ignore 'retry' since it is found with lists:member/2
+	    %% in handle_event_result/8
+	    continue(Parent, Debug, S, Hib, StateOps);
 	hibernate ->
 	    proc_lib:hibernate(
-	      ?MODULE, wakeup_from_hibernate,
-	      [Parent,Debug,ModNam,StateQP,Data,EventOpts]),
+	      ?MODULE, wakeup_from_hibernate, [Parent,Debug,S,StateOps]),
 	    ok;
-	{insert_events,Events} ->
-	    [State,Q|P] = StateQP,
+	{reply,{_To,_Tag}=From,Reply} ->
+	    reply(From, Reply),
+	    NewDebug =
+		case Debug of
+		    [] ->
+			Debug;
+		    _ ->
+			#{name := Name, state := State} = S,
+			sys:handle_debug(
+			  Debug, fun print_event/3,
+			  {Name,State}, {out,Reply,From})
+		end,
+	    continue(Parent, NewDebug, S, Hib, StateOps);
+	{stop,Reason} ->
+	    terminate(Reason, Debug, S);
+	{insert_event,Type,Content} ->
 	    continue(
-	      Parent, Debug, ModNam,
-	      [State,(Q ++ Events)|P],
-	      Data, Hib, EventOpts);
-	{filter,FilterFun} ->
-	    continue(
-	      Parent, Debug, ModNam, StateQP, Data,
-	      Hib, EventOpts, FilterFun);
-	{Type,Ref} ->
-	    case filter_fun(Type, Ref) of
-		{} ->
-		    continue(
-		      Parent, Debug, ModNam, StateQP, Data,
-		      Hib, EventOpts);
-		{Class,Reason,Stacktrace} ->
-		    terminate(
-		      Class, Reason, Stacktrace, Debug,
-		      ModNam, StateQP, Data);
-		FilterFun ->
-		    continue(
-		      Parent, Debug, ModNam, StateQP, Data,
-		      Hib, EventOpts, FilterFun)
-	    end;
+	      Parent, Debug,
+	      S#{queue := [{Type,Content}|Q]},
+	      Hib, StateOps);
+	{remove_event,Type,Content} ->
+	    RemoveFun =
+		fun (T, C) when T =:= Type, C =:= Content -> true;
+		    (_, _) -> false
+		end,
+	    continue_remove(
+	      Parent, Debug, S, Hib, StateOps, RemoveFun);
+	{remove_event,RemoveFun} ->
+	    continue_remove(
+	      Parent, Debug, S, Hib, StateOps, RemoveFun);
 	_ ->
-	    terminate(
-	      {bad_event_opt,EventOpt},
-	      Debug, ModNam, StateQP, Data)
+	    case remove_fun(StateOp) of
+		[] ->
+		    continue(Parent, Debug, S, Hib, StateOps);
+		[Reason] ->
+		    terminate(Reason, Debug, S);
+		[Class,Reason,Stacktrace] ->
+		    terminate(Class, Reason, Stacktrace, Debug, S);
+		RemoveFun ->
+		    continue_remove(
+		      Parent, Debug, S, Hib, StateOps, RemoveFun)
+	    end
     end;
-continue(Parent, Debug, ModNam, StateQP, Data, Hib, []) ->
-    continue(Parent, Debug, ModNam, StateQP, Data, Hib);
-continue(_Parent, Debug, ModNam, StateQP, Data, _Hib, EventOpts) ->
-    terminate(
-      {bad_event_opt_list,EventOpts}, Debug, ModNam, StateQP, Data).
-%%
-%% Filter state due to one EventOpt then continue with the rest
-continue(
-  Parent, Debug, ModNam, [State,Q|P] = StateQP, Data, Hib,
-  EventOpts, FilterFun) ->
-    try [[E || E <- Q, FilterFun(E)]|[E || E <- P, FilterFun(E)]] of
-	QP ->
-	    continue(
-	      Parent, Debug, ModNam, [State,QP], Data, Hib, EventOpts)
-    catch
-	Class:Reason ->
-	    terminate(
-	      Class, Reason, erlang:get_stacktrace(),
-	      Debug, ModNam, StateQP, Data)
-    end.
+continue(Parent, Debug, S, Hib, []) ->
+    continue(Parent, Debug, S, Hib);
+continue(_Parent, Debug, S, _Hib, StateOps) ->
+    terminate({bad_state_op_list,StateOps}, Debug, S).
 %%
 %% Continue with traversing all queued events or receiving a new message
-continue(Parent, Debug, ModNam, [State,Q|P] = StateQP, Data, Hib) ->
-    case Q of
-	[] ->
+continue(Parent, Debug, S, Hib) ->
+    case S of
+	#{queue := []} ->
+	    %% Receive a new message
 	    receive
 		Msg ->
-		    handle_msg(
-		      Parent, Debug, ModNam, StateQP, Data, Hib, Msg)
+		    handle_msg(Parent, Debug, S, Hib, Msg)
 	    end;
-	[Event|Events] ->
-	    handle_event(
-	      Parent, Debug, ModNam, [State,Events|P], Data, Hib, Event)
+	#{queue := [Event|Q]} ->
+	    %% Pick a message from the queue
+	    handle_event(Parent, Debug, S#{queue := Q}, Hib, Event)
     end.
 
-filter_fun(cancel_timer, TimerRef) ->
+%% Remove oldest matching event from the queue(s)
+continue_remove(
+  Parent, Debug,
+  #{queue := Q, postponed := P} = S,
+  Hib, StateOps, RemoveFun) ->
+    try
+	case remove_tail_event(RemoveFun, P) of
+	    false ->
+		case remove_head_event(RemoveFun, Q) of
+		    false ->
+			S;
+		    NewQ ->
+			S#{queue := NewQ}
+		end;
+	    NewP ->
+		S#{postponed := NewP}
+	end
+    of
+	NewS ->
+	    continue(Parent, Debug, NewS, Hib, StateOps)
+    catch
+	Class:Reason ->
+	    terminate(Class, Reason, erlang:get_stacktrace(), Debug, S)
+    end.
+
+remove_head_event(_RemoveFun, []) ->
+    false;
+remove_head_event(RemoveFun, [{Tag,Content}|Events]) ->
+    case RemoveFun(Tag, Content) of
+	false ->
+	    remove_head_event(RemoveFun, Events);
+	true ->
+	    Events
+    end.
+
+remove_tail_event(_RemoveFun, []) ->
+    false;
+remove_tail_event(RemoveFun, [{Tag,Content} = Event|Events]) ->
+    case remove_tail_event(RemoveFun, Events) of
+	false ->
+	    RemoveFun(Tag, Content) andalso Events;
+	NewEvents ->
+	    [Event|NewEvents]
+    end.
+
+remove_fun({cancel_timer,TimerRef}) ->
     try erlang:cancel_timer(TimerRef) of
 	TimeLeft when is_integer(TimeLeft) ->
-	    {};
+	    [];
 	false ->
 	    receive
 		{timeout,TimerRef,_} ->
@@ -463,30 +524,32 @@ filter_fun(cancel_timer, TimerRef) ->
 		    ok
 	    end,
 	    fun
-		({timeout,TRef,_}) when TRef =:= TimerRef ->
-		    false;
-		(_) ->
-		    true
+		(info, {timeout,TRef,_})
+		  when TRef =:= TimerRef ->
+		    true;
+		(_, _) ->
+		    false
 	    end
     catch
 	Class:Reason ->
-	    {Class,Reason,erlang:get_stacktrace()}
+	    [Class,Reason,erlang:get_stacktrace()]
     end;
-filter_fun(demonitor, MonitorRef) ->
+remove_fun({demonitor,MonitorRef}) ->
     try erlang:demonitor(MonitorRef, [flush,info]) of
 	false ->
-	    {};
+	    [];
 	true ->
-	    fun ({'DOWN',MRef,_,_,_}) when MRef =:= MonitorRef->
-		    false;
-		(_) ->
-		    true
+	    fun (info, {'DOWN',MRef,_,_,_})
+		  when MRef =:= MonitorRef->
+		    true;
+		(_, _) ->
+		    false
 	    end
     catch
 	Class:Reason ->
-	    {Class,Reason,erlang:get_stacktrace()}
+	    [Class,Reason,erlang:get_stacktrace()]
     end;
-filter_fun(unlink, Id) ->
+remove_fun({unlink,Id}) ->
     try unlink(Id) of
 	true ->
 	    receive
@@ -495,34 +558,36 @@ filter_fun(unlink, Id) ->
 	    after 0 ->
 		    ok
 	    end,
-	    fun ({'EXIT',I,_}) when I =:= Id ->
-		    false;
-		(_) ->
-		    true
+	    fun (info, {'EXIT',I,_})
+		  when I =:= Id ->
+		    true;
+		(_, _) ->
+		    false
 	    end
     catch
 	Class:Reason ->
-	    {Class,Reason,erlang:get_stacktrace()}
-    end.
+	    [Class,Reason,erlang:get_stacktrace()]
+    end;
+remove_fun(StateOp) ->
+    [{bad_state_op,StateOp}].
 
 
 
-terminate(Reason, Debug, ModNam, StateQP, Data) ->
-    terminate(exit, Reason, [], Debug, ModNam, StateQP, Data).
+terminate(Reason, Debug, S) ->
+    terminate(exit, Reason, [], Debug, S).
 %%
 terminate(
   Class, Reason, Stacktrace, Debug,
-  [Module|_Name] = ModNam, [State|_] = StateQP, Data) ->
-    try Module:terminate(Reason, State, Data) of
+  #{module := Module, state := State, state_data := StateData} = S) ->
+    try Module:terminate(Reason, State, StateData) of
 	_ -> ok
     catch
 	_ -> ok;
 	C:R ->
 	    ST = erlang:get_stacktrace(),
 	    error_info(
-	      C, R, ST,
-	      Debug, ModNam, StateQP,
-	      format_status(terminate, get(), State, Data, Module)),
+	      C, R, ST, Debug, S,
+	      format_status(terminate, get(), S)),
 	    erlang:raise(C, R, ST)
     end,
     case Reason of
@@ -531,8 +596,8 @@ terminate(
 	{shutdown,_} -> ok;
 	_ ->
 	    error_info(
-	      Class, Reason, Stacktrace, Debug, ModNam, StateQP,
-	      format_status(terminate, get(), State, Data, Module))
+	      Class, Reason, Stacktrace, Debug, S,
+	      format_status(terminate, get(), S))
     end,
     case Stacktrace of
 	[] ->
@@ -543,7 +608,8 @@ terminate(
 
 error_info(
   Class, Reason, Stacktrace, Debug,
-  [_Module|Name], [State,Q|_P], FmtData) ->
+  #{name := Name, state := State, queue := Q},
+  FmtStateData) ->
     {FixedReason,FixedStacktrace} =
 	case Stacktrace of
 	    [{M,F,Args,_}|ST]
@@ -572,7 +638,7 @@ error_info(
 		  "** Last event = ~p~n"
 	  end ++
 	  "** When State  = ~p~n" ++
-	  "**   Data = ~p~n" ++
+	  "**   StateData = ~p~n" ++
 	  "** Reason for termination = ~w:~p~n" ++
 	  case FixedStacktrace of
 	      [] ->
@@ -584,9 +650,9 @@ error_info(
       [Name |
        case Q of
 	   [] ->
-	       [State,FmtData,Class,FixedReason];
+	       [State,FmtStateData,Class,FixedReason];
 	   [Event|_] ->
-	       [Event,State,FmtData,Class,FixedReason]
+	       [Event,State,FmtStateData,Class,FixedReason]
        end] ++
 	  case FixedStacktrace of
 	      [] ->
@@ -599,40 +665,40 @@ error_info(
 
 
 
-handle_msg(
-  Parent, Debug,
-  [_Module|Name] = ModNam,
-  [State|_QP] = StateQP,
-  Data, Hib, Msg) ->
+handle_msg(Parent, Debug, #{name := Name, state := State} = S, Hib, Msg) ->
     case Msg of
 	{system,From,Req} ->
-	    sys:handle_system_msg(
-	      Req, From, Parent, ?MODULE, Debug,
-	      {ModNam,StateQP,Data},
-	      Hib);
+	    sys:handle_system_msg(Req, From, Parent, ?MODULE, Debug, S, Hib);
 	{'EXIT',Parent,Reason} ->
-	    terminate(Reason, Debug, ModNam, StateQP, Data);
+	    terminate(Reason, Debug, S);
 	_ when Debug =:= [] ->
-	    handle_event(
-	      Parent, Debug, ModNam, StateQP, Data, Hib, event(Msg));
+	    handle_event(Parent, Debug, S, Hib, event(Msg));
 	_ ->
 	    Event = event(Msg),
 	    NewDebug =
 		sys:handle_debug(
 		  Debug, fun print_event/3, {Name,State}, {in,Event}),
-	    handle_event(
-	      Parent, NewDebug, ModNam, StateQP, Data, Hib, Event)
+	    handle_event(Parent, NewDebug, S, Hib, Event)
     end.
-
 
 event(Msg) ->
     case Msg of
-	{'$gen_call',From,Call} ->
-	    {call,From,Call};
+	{'$gen_call',From,Request} ->
+	    {call,{From,Request}};
 	{'$gen_event',Event} ->
 	    {event,Event};
 	_ ->
 	    {info,Msg}
+%%%
+	%% {'$gen_call',From,Request} ->
+	%%     {call,From,Request};
+	%% {'$gen_event',Event} ->
+	%%     {event,Event};
+	%% {timeout,TRef,_} when is_reference(TRef) ->
+	%%     Msg;
+	%% _ ->
+	%%     {info,Msg}
+%%%
 	%% {_} ->
 	%%     {Msg};
 	%% _ when
@@ -645,145 +711,177 @@ event(Msg) ->
 
 handle_event(
   Parent, Debug,
-  [Module|_Name] = ModNam,
-  [State,Q|P] = StateQP,
-  Data, Hib, Event) ->
-    try Module:State(Event, Data) of
+  #{module := Module,
+    prev_state := PrevState,
+    state := State,
+    state_data := StateData,
+    queue := Q} = S,
+  Hib, {Type,Content} = Event) ->
+    try Module:State(PrevState, Type, Content, StateData) of
 	Result ->
-	    handle_event(
-	      Parent, Debug, ModNam, StateQP, Data, Hib, Event, Result)
+	    handle_event_result(Parent, Debug, S, Hib, Event, Result)
     catch
 	Result ->
-	    handle_event(
-	      Parent, Debug, ModNam, StateQP, Data, Hib, Event, Result);
+	    handle_event_result(Parent, Debug, S, Hib, Event, Result);
 	error:undef ->
-	    StateEQP = [State,[Event|Q]|P],
 	    case erlang:get_stacktrace() of
-		[{Module,State,[Event,Data]=Args,_}|Stacktrace] ->
+		[{Module,State,[Event,StateData]=Args,_}|Stacktrace] ->
 		    terminate(
 		      error,
 		      {undef_state_function,{Module,State,Args}},
 		      Stacktrace,
-		      Debug, ModNam, StateEQP, Data);
+		      Debug,
+		      S#{queue := [Event|Q]});
 		Stacktrace ->
 		    terminate(
-		      error, undef, Stacktrace,
-		      Debug, ModNam, StateEQP, Data)
+		      error, undef, Stacktrace, Debug,
+		      S#{queue := [Event|Q]})
 	    end;
 	Class:Reason ->
 	    Stacktrace = erlang:get_stacktrace(),
-	    StateEQP = [State,[Event|Q]|P],
 	    terminate(
-	      Class, Reason, Stacktrace, Debug, ModNam, StateEQP, Data)
-    end.
-%%
-handle_event(
-  Parent, Debug, ModNam, StateQP, Data, Hib, Event, Result) ->
-    case Result of
-	{stop,Reason,NewData} ->
-	    terminate(Reason, Debug, ModNam, StateQP, NewData);
-	{ok,NewState,NewData} ->
-	    handle_event_ok(
-	      Parent, Debug, ModNam, StateQP, NewData, Hib, Event,
-	      NewState, []);
-	{ok,NewState,NewData,EventOpts} ->
-	    handle_event_ok(
-	      Parent, Debug, ModNam, StateQP, NewData, Hib, Event,
-	      NewState, EventOpts);
-	{retry,NewState,NewData} ->
-	    handle_event_retry(
-	      Parent, Debug, ModNam, StateQP, NewData, Hib, Event,
-	      NewState, []);
-	{retry,NewState,NewData,EventOpts} ->
-	    handle_event_retry(
-	      Parent, Debug, ModNam, StateQP, NewData, Hib, Event,
-	      NewState, EventOpts);
-	BadReturn ->
-	    [State,Q|P] = StateQP,
-	    terminate(
-	      {bad_return_value,BadReturn},
-	      Debug, ModNam,
-	      [State,[Event|Q]|P],
-	      Data)
+	      Class, Reason, Stacktrace, Debug,
+	      S#{queue := [Event|Q]})
     end.
 
-handle_event_ok(
-  Parent, Debug, ModNam, StateQP, NewData, Hib, Event,
-  NewState, EventOpts) ->
+handle_event_result(
+  Parent, Debug,
+  #{state := State, state_data := StateData, queue := Q} = S,
+  Hib, Event, Result) ->
+    case Result of
+	{} -> % Ignore
+	    handle_event_accept(
+	      Parent, Debug, S, Hib, [],
+	      State, StateData, Event);
+	{NewStateData} -> % Postpone
+	    handle_event_retry(
+	      Parent, Debug, S, Hib, [],
+	      State, NewStateData, Event);
+	{NewState,NewStateData} -> % Consume
+	    handle_event_accept(
+	      Parent, Debug, S, Hib, [],
+	      NewState, NewStateData, Event);
+	{NewState,NewStateData,StateOps} when is_list(StateOps) ->
+	    handle_event_result(
+	      Parent, Debug, S, Hib, StateOps,
+	      NewState, NewStateData, Event);
+	StateOps when is_list(StateOps) ->
+	    handle_event_result(
+	      Parent, Debug, S, Hib, StateOps,
+	      State, StateData, Event);
+	BadReturn ->
+	    terminate(
+	      {bad_return_value,BadReturn}, Debug,
+	      S#{queue := [Event|Q]})
+    end.
+
+handle_event_result(
+  Parent, Debug, S, Hib, StateOps, NewState, NewStateData, Event) ->
+    case lists:member(retry, StateOps) of
+	true ->
+	    handle_event_retry(
+	      Parent, Debug, S, Hib, StateOps,
+	      NewState, NewStateData, Event);
+	false ->
+	    handle_event_accept(
+	      Parent, Debug, S, Hib, StateOps,
+	      NewState, NewStateData, Event)
+    end.
+
+handle_event_accept(
+  Parent, Debug,
+  #{name := Name, state := State} = S,
+  Hib, StateOps, NewState, NewStateData, Event) ->
     NewDebug =
 	case Debug of
 	    [] -> Debug;
 	    _ ->
-		[_Module|Name] = ModNam,
-		[State|_] = StateQP,
 		sys:handle_debug(
 		  Debug, fun print_event/3,
-		  {Name,State}, {ok,Event,NewState})
+		  {Name,State}, {accept,Event,NewState})
 	end,
-    case StateQP of
-	[NewState|_] ->
+    case NewState of
+	State ->
 	    %% State matches equal - do not retry postponed events
 	    continue(
-	      Parent, NewDebug, ModNam, StateQP, NewData, Hib, EventOpts);
-	[_State,Q|P] ->
+	      Parent, NewDebug,
+	      S#{state_data := NewStateData},
+	      Hib, StateOps);
+	_ ->
 	    %% New state - move all postponed events to queue
+	    #{queue := Q, postponed := P} = S,
+	    NewQ = lists:reverse(P, Q),
 	    continue(
-	      Parent, NewDebug, ModNam,
-	      [NewState,lists:reverse(P, Q)],
-	      NewData, Hib, EventOpts)
+	      Parent, NewDebug,
+	      S#{
+		prev_state := State,
+		state := NewState,
+		state_data := NewStateData,
+		queue := NewQ,
+		postponed := []},
+	      Hib, StateOps)
     end.
 
 handle_event_retry(
-  Parent, Debug, ModNam, StateQP, NewData, Hib, Event,
-  NewState, EventOpts) ->
+  Parent, Debug,
+  #{name := Name, state := State} = S,
+  Hib, StateOps, NewState, NewStateData, Event) ->
     NewDebug =
 	case Debug of
 	    [] -> Debug;
 	    _ ->
-		[_Module|Name] = ModNam,
-		[State|_] = StateQP,
 		sys:handle_debug(
 		  Debug, fun print_event/3,
 		  {Name,State}, {retry,Event,NewState})
 	end,
-    case StateQP of
-	[NewState,Q|P] ->
+    case NewState of
+	State ->
 	    %% State matches equal - do not retry postponed events
 	    %% but postpone the current
+	    #{postponed := P} = S,
 	    continue(
-	      Parent, NewDebug, ModNam,
-	      [NewState,Q,Event|P],
-	      NewData, Hib, EventOpts);
-	[_State,Q|P] ->
+	      Parent, NewDebug,
+	      S#{state_data := NewStateData, postponed := [Event|P]},
+	      Hib, StateOps);
+	_ ->
 	    %% New state - move all postponed events and
 	    %% the current to queue
+	    #{queue := Q, postponed := P} = S,
+	    NewQ = lists:reverse(P, [Event|Q]),
 	    continue(
-	      Parent, NewDebug, ModNam,
-	      [NewState,lists:reverse(P, [Event|Q])],
-	      NewData, Hib, EventOpts)
+	      Parent, NewDebug,
+	      S#{
+		prev_state := State,
+		state := NewState,
+		state_data := NewStateData,
+		queue := NewQ,
+		postponed := []},
+	      Hib, StateOps)
     end.
 
 
 
-format_status(Opt, PDict, State, Data, Module) ->
-    case erlang:function_exported(Module, format_status, 4) of
+format_status(
+  Opt, PDict,
+  #{module := Module, state := State, state_data := StateData}) ->
+    case erlang:function_exported(Module, format_status, 2) of
 	true ->
-	    try Module:format_status(Opt, PDict, State, Data)
+	    try Module:format_status(Opt, [PDict,State,StateData])
 	    catch
 		Result -> Result;
 		_:_ ->
-		    format_status_default(Opt, State, Data)
+		    format_status_default(Opt, State, StateData)
 	    end;
 	false ->
-	    format_status_default(Opt, State, Data)
+	    format_status_default(Opt, State, StateData)
     end.
 
-format_status_default(Opt, State, Data) ->
+format_status_default(Opt, State, StateData) ->
     case Opt of
 	terminate ->
-	    {State,Data};
+	    {State,StateData};
 	_ ->
 	    [{data,
 	      [{"State",State},
-	       {"Data",Data}]}]
+	       {"StateData",StateData}]}]
     end.
