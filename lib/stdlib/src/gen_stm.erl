@@ -48,25 +48,36 @@
 %%% Interface functions.
 %%% ---------------------------------------------------
 
--type from() :: {pid(), Tag :: term()}.
+-type from() :: {To :: pid(), Tag :: term()}.
 -type state() :: atom().
 -type state_data() :: term().
--type event_type() :: call | event | info.
--type call_event_content() :: {from(), Request :: term()}.
--type event_content() :: call_event_content() | term().
--type remove_event_predicate() ::
+-type event_type() ::
+	{call,from()} | event | info | % Used in this version
+	tuple() | atom() | % Reserved for future use
+	term(). % Free to use for implementation internal events
+-type event_content() :: term().
+-type remove_event_predicate() :: % Return true for event to remove
 	fun((event_type(), event_content()) -> boolean()).
 -type reason() :: term().
 -type state_op() ::
-	retry |
+	%% First NewState and NewState data and postponing
+	%% the current event (iff 'retry' is present in [state_op()])
+	%% is executed, then all state_op() in order of apperance.
+	retry | % Postpone the current event to an other state
 	hibernate |
 	{stop, reason()} |
-	{insert_event, event_type(), event_content()} |
-	{remove_event, event_type(), event_content()} |
-	{remove_event, remove_event_predicate()} |
-	{cancel_timer, TimerRef :: reference()} |
-	{demonitor, MonitorRef :: reference()} |
-	{unlink, Id :: pid() | port()}.
+	{insert_event, % Insert the event as the oldest i.e next to handle
+	 event_type(), event_content()} |
+	{remove_event, % Remove the oldest matching event
+	 event_type(), event_content()} |
+	{remove_event, % Remove the oldest event satisfying predicate
+	 remove_event_predicate()} |
+	{cancel_timer, % Cancel timer and clean up mess(ages)
+	 TimerRef :: reference()} |
+	{demonitor, % Demonitor and clean up mess(ages)
+	 MonitorRef :: reference()} |
+	{unlink, % Unlink and clean up mess(ages)
+	 Id :: pid() | port()}.
 -type process_dictionary() :: [{Key :: term(), Value :: term()}].
 
 %% This is not a state callback.  It is called only once and
@@ -80,17 +91,19 @@
     {stop, reason()}.
 
 %% An example callback for state 'init'.
-%% Note that state callbacks and only state callbacks have arity 4
-%% and that is intentional.  I hope we can guarantee that.
+%% Note that state callbacks and only state callbacks have arity 5
+%% and that is intended to be a guarantee.
 -callback init(
-	    PrevState :: state(),
 	    event_type(),
 	    event_content(),
+	    PrevState :: state(),
+	    State :: state(), % Current state; 'init' in this example
 	    StateData :: state_data()) ->
-    [state_op()] |
-    {} |
-    {NewStateData :: state_data()} |
-    {NewState :: state(), NewStateData :: state_data()} |
+    [state_op()] | % {State,StateData,[state_op()]}
+    {} | % {State,StateData,[]}
+    {NewStateData :: state_data()} | % {State,NewStateData,[retry]}
+    {NewState :: state(),
+     NewStateData :: state_data()} | % {NewState,NewStateData,[]}
     {NewState :: state(), NewStateData :: state_data(), [state_op()]}.
 
 %% -callback handle_event(
@@ -107,10 +120,13 @@
 	    StateData :: state_data()) ->
     any().
 
+%% Note that the new code has to be prepared for an OldState
+%% from the old code version in all state functions.
 -callback code_change(
-	    {OldVsn :: term() | {down, term()}, Extra :: term()},
+	    OldVsn :: term() | {down, term()},
 	    OldState :: state(),
-	    OldStateData :: state_data()) ->
+	    OldStateData :: state_data(),
+	    Extra :: term()) ->
     {ok, State :: state(), StateData :: state_data()} |
     {ok, State :: state(), StateData :: state_data(), [state_op()]}.
 
@@ -124,7 +140,7 @@
 
 -optional_callbacks(
    [format_status/2,
-    init/4]).
+    init/5]).
 
 
 %%%  -----------------------------------------------------------------
@@ -151,7 +167,8 @@ stop(Server) ->
 stop(Server, Reason, Timeout) ->
     gen:stop(Server, Reason, Timeout).
 
-%% Send an message to a state machine
+%% Send an message to a state machine i.e the same as Server ! Msg
+%% but Server can be like first argument to event/2 and call/2.
 send({global,Name}, Msg) ->
     try	global:send(Name, Msg) of
 	_ -> ok
@@ -171,11 +188,12 @@ send(Server, Msg) when is_atom(Server) ->
 send(Server, Msg) when is_pid(Server) ->
     do_send(Server, Msg).
 
-%% Send an event to a state machine
+%% Send an event to a state machine that arrives with type 'info'
 event(Server, Event) ->
     send(Server, event_msg(Event)).
 
-%% Call a state machine (synchronous; a reply is expected)
+%% Call a state machine (synchronous; a reply is expected) that
+%% arrives with type {call,From}
 call(Server, Request) ->
     try gen:call(Server, '$gen_call', Request) of
 	{ok,Reply} ->
@@ -189,6 +207,7 @@ call(Server, Request) ->
     end.
 
 %% Reply from a state machine callback to whom awaits in call/2
+%% XXX Should we remove this since it does not produce debug output?
 reply({To,Tag}, Reply) ->
     Msg = {Tag,Reply},
     try To ! Msg of
@@ -298,20 +317,18 @@ system_terminate(Reason, _Parent, Debug, S) ->
 
 system_code_change(
   #{module := Module,
-    prev_state := Pstate,
     state := State,
     state_data := StateData} = S,
   _Mod, OldVsn, Extra) ->
     case
-	try Module:code_change(OldVsn, {Pstate, State, StateData}, Extra)
+	try Module:code_change(OldVsn, State, StateData, Extra)
 	catch
 	    Result -> Result
 	end
     of
-	{ok,{NewPstate,NewState,NewStateData}} ->
+	{ok,NewState,NewStateData} ->
 	    {ok,
 	     S#{
-	       prev_state := NewPstate,
 	       state := NewState,
 	       state_data := NewStateData}};
 	BadResult ->
@@ -391,7 +408,7 @@ wakeup_from_hibernate(Parent, Debug, S, StateOps) ->
     continue(Parent, Debug, S, Hib, StateOps).
 
 %%%  -----------------------------------------------------------------
-%%%  Implementation
+%%%  STate Machine engine implementation of proc_lib/gen server
 
 %% Loop over StateOps before continuing
 continue(
@@ -684,7 +701,7 @@ handle_msg(Parent, Debug, #{name := Name, state := State} = S, Hib, Msg) ->
 event(Msg) ->
     case Msg of
 	{'$gen_call',From,Request} ->
-	    {call,{From,Request}};
+	    {{call,From},Request};
 	{'$gen_event',Event} ->
 	    {event,Event};
 	_ ->
@@ -717,7 +734,7 @@ handle_event(
     state_data := StateData,
     queue := Q} = S,
   Hib, {Type,Content} = Event) ->
-    try Module:State(PrevState, Type, Content, StateData) of
+    try Module:State(Type, Content, PrevState, State, StateData) of
 	Result ->
 	    handle_event_result(Parent, Debug, S, Hib, Event, Result)
     catch
