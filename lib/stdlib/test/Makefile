@@ -45,6 +45,7 @@ MODULES= \
 	format_SUITE \
 	gen_event_SUITE \
 	gen_fsm_SUITE \
+	gen_stm_SUITE \
 	gen_server_SUITE \
 	id_transform_SUITE \
 	io_SUITE \
