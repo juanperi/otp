@@ -20,101 +20,129 @@
 -module(gen_stm).
 
 %% API
--export([start/3,start/4,start_link/3,start_link/4,
-	 enter_loop/4,enter_loop/5,enter_loop/6,
-	 stop/1,stop/3,
-	 event/2,call/2,
-	 reply/2]).
+-export(
+   [start/3,start/4,start_link/3,start_link/4,
+    stop/1,stop/3,
+    event/2,call/2,
+    enter_loop/4,enter_loop/5,enter_loop/6,
+    reply/2]).
 
 %% gen callbacks
--export([init_it/6]).
+-export(
+   [init_it/6]).
 
 %% sys callbacks
--export([system_continue/3,
-	 system_terminate/4,
-	 system_code_change/4,
-	 system_get_state/1,
-	 system_replace_state/2,
-	 format_status/2]).
+-export(
+   [system_continue/3,
+    system_terminate/4,
+    system_code_change/4,
+    system_get_state/1,
+    system_replace_state/2,
+    format_status/2]).
 
 %% Internal callbacks
--export([wakeup_from_hibernate/6]).
+-export(
+   [wakeup_from_hibernate/6]).
 
 %%% ---------------------------------------------------
 %%% Interface functions.
 %%% ---------------------------------------------------
 
-%% -type from() :: {pid(), Tag :: term()}.
+-type from() :: {pid(), Tag :: term()}.
 -type state() :: atom().
 -type data() :: term().
-%% -type event() ::
-%% 	{call, from(), term()} |
-%% 	{event, term()} |
-%% 	{info, term()}.
-%% -type event_action() ::	ok | retry.
+-type event() ::
+	{call, from(), term()} |
+	{event, term()} |
+	{info, term()}.
+-type event_action() ::	ok | retry.
 -type event_option() ::
 	{insert_events, [term()]} |
 	{cancel_timer, reference()} |
 	{demonitor, reference()} |
 	{unlink, pid() | port()} |
+	{filter, fun((term()) -> boolean())} |
 	hibernate.
+-type reason() :: term().
 
+%% This is not a state callback.  It is called only once and
+%% the server is not running until this function has returned
+%% an {ok, ...} tuple.  Thereafter the state callbacks are called
+%% for all events (messages) to this server.
 -callback init(Args :: term()) ->
-    {ok, state(), data()} |
-    {ok, state(), data(), [event_option()]} |
+    {ok, InitialState :: state(), InitialData :: data()} |
+    {ok, InitialState :: state(), InitialData :: data(),
+     [event_option()]} |
     ignore |
-    {stop, Reason :: term()}.
+    {stop, reason()}.
+
+%% An example callback for state 'init'.
+%% Note that state callbacks and only state callbacks have arity 2
+%% and that is intentional.  I hope we can guarantee that.
+-callback init(Event :: event(), Data :: data()) ->
+    {event_action(), NewState :: state(), NewData :: data()} |
+    {event_action(), NewState :: state(), NewData :: data(),
+     [event_option()]} |
+    {stop, reason(), NewData :: data()}.
 
 %% -callback handle_event(Event :: event(), State :: term(), Data :: term()) ->
-%%     {event_action(), State :: term(), Data :: term()} |
-%%     {event_action(), State :: term(), Data :: term(), [event_option()]} |
-%%     {stop, Reason :: term(), NewData :: term()}.
+%%     {event_action(), NewState :: term(), NewData :: term()} |
+%%     {event_action(), NewState :: term(), NewData :: term(),
+%%      [event_option()]} |
+%%     {stop, reason(), NewData :: term()}.
 
+%% Clean up before the server terminates.
 -callback terminate(
-	    Reason :: normal | shutdown | {shutdown, term()} | term(),
-	    state(),
-	    data()) ->
+	    Reason :: normal | shutdown | {shutdown, term()} | reason(),
+	    State :: state(),
+	    Data :: data()) ->
     any().
 
 -callback code_change(
 	    OldVsn :: term() | {down, term()},
-	    state(),
-	    data(),
+	    OldState :: state(),
+	    OldData :: data(),
 	    Extra :: term()) ->
-    {ok, NewState :: state(), NewData :: data()} |
-    {ok, NewState :: state(), NewData :: data(), [event_option()]}.
+    {ok, State :: state(), Data :: data()} |
+    {ok, State :: state(), Data :: data(), [event_option()]}.
 
--callback format_status(Opt, PDict, state(), data()) ->
+-callback format_status(
+	    StatusOption, ProcessDictionary,
+	    State :: state(), Data :: data()) ->
     Status :: term() when
-      Opt :: normal | terminate,
-      PDict :: [{Key :: term(), Value :: term()}].
+      StatusOption :: normal | terminate,
+      ProcessDictionary :: [{Key :: term(), Value :: term()}].
 
--optional_callbacks([format_status/4]).
+-optional_callbacks(
+   [format_status/4,
+    init/2]).
 
 
 %%%  -----------------------------------------------------------------
 %%%  API
 
+%% Start a state machine
 start(Mod, Args, Options) ->
     gen:start(?MODULE, nolink, Mod, Args, Options).
 %%
 start(Name, Mod, Args, Options) ->
     gen:start(?MODULE, nolink, Name, Mod, Args, Options).
 
+%% Start and link to a state machine
 start_link(Mod, Args, Options) ->
     gen:start(?MODULE, link, Mod, Args, Options).
 %%
 start_link(Name, Mod, Args, Options) ->
     gen:start(?MODULE, link, Name, Mod, Args, Options).
 
-
+%% Stop a state machine
 stop(Name) ->
     gen:stop(Name).
 %%
 stop(Name, Reason, Timeout) ->
     gen:stop(Name, Reason, Timeout).
 
-
+%% Send an event to a state machine
 event({global,Name}, Event) ->
     try	global:send(Name, event_msg(Event)) of
 	_ -> ok
@@ -128,20 +156,13 @@ event({via,Mod,Name}, Event) ->
 	_:_ -> ok
     end;
 event({Name,Node} = Dest, Event) when is_atom(Name), is_atom(Node) ->
-    send_event_msg(Dest, Event);
+    send(Dest, event_msg(Event));
 event(Dest, Event) when is_atom(Dest) ->
-    send_event_msg(Dest, Event);
+    send(Dest, event_msg(Event));
 event(Dest, Event) when is_pid(Dest) ->
-    send_event_msg(Dest, Event).
+    send(Dest, event_msg(Event)).
 
-event_msg(Event) ->
-    {'$gen_event',Event}.
-
-send_event_msg(Dest, Event) ->
-    Dest ! event_msg(Event),
-    ok.
-
-
+%% Call a state machine (synchronous; a reply is expected)
 call(Server, Request) ->
     try gen:call(Server, '$gen_call', Request) of
 	{ok,Reply} ->
@@ -154,12 +175,20 @@ call(Server, Request) ->
 	      erlang:get_stacktrace())
     end.
 
+%% Reply from a state machine callback to who is waiting in call/2
 reply({To,Tag}, Reply) ->
     Msg = {Tag,Reply},
-    try To ! Msg
-    catch _:_ -> Msg
+    try To ! Msg of
+	_ ->
+	    ok
+    catch
+	_:_ -> ok
     end.
 
+%% Instead of starting the state machine through start/3,4
+%% or start_link/3,4 turn the current process presumably
+%% started by proc_lib into a state machine supplying
+%% the same arguments as you would have returned from init/1
 enter_loop(Module, Options, State, Data) ->
     enter_loop(Module, Options, State, Data, self()).
 %%
@@ -169,6 +198,25 @@ enter_loop(Module, Options, State, Data, Server) ->
 enter_loop(Module, Options, State, Data, Server, EventOpts) ->
     Parent = gen:get_parent(),
     enter(Module, Options, State, Data, Server, EventOpts, Parent).
+
+%%%  -----------------------------------------------------------------
+%%%  API helpers
+
+event_msg(Event) ->
+    {'$gen_event',Event}.
+
+%% Might actually not send the message
+send(Dest, Msg) ->
+    try erlang:send(Dest, Msg, [noconnect]) of
+	noconnect ->
+	    spawn(erlang, send, [Dest,Msg]),
+	    ok;
+	ok ->
+	    ok
+    catch
+	_:_ ->
+	    ok
+    end.
 
 enter(Module, Options, State, Data, Server, EventOpts, Parent) ->
     Name = gen:get_proc_name(Server),
@@ -199,6 +247,9 @@ init_it(Starter, Parent, Server, Module, Args, Options) ->
 	    proc_lib:init_ack(Starter, {error,Reason}),
 	    erlang:raise(Class, Reason, erlang:get_stacktrace())
     end.
+
+%%%  -----------------------------------------------------------------
+%%%  gen callbacks helpers
 
 init_result(Starter, Parent, Server, Module, Result, Options) ->
     case Result of
@@ -245,7 +296,8 @@ system_code_change(
   {[Module|_Name] = ModNam,[State|QP],Data}, _Mod, OldVsn, Extra) ->
     case
 	try Module:code_change(OldVsn, State, Data, Extra)
-	catch Result -> Result
+	catch
+	    Result -> Result
 	end
     of
 	{ok,NewState,NewData} ->
@@ -321,6 +373,10 @@ wakeup_from_hibernate(
 %%%  -----------------------------------------------------------------
 %%%  Implementation
 
+%% The internal state is split over 3 arguments [Mod|Name] = ModNam,
+%% [State,Q|P] = StateQP, Data to minimize term rebuild and
+%% hereby garbage collect load
+
 %% Loop over EventOpts before continuing
 continue(
   Parent, Debug, ModNam, StateQP, Data, Hib, [EventOpt|EventOpts]) ->
@@ -330,37 +386,56 @@ continue(
 	      ?MODULE, wakeup_from_hibernate,
 	      [Parent,Debug,ModNam,StateQP,Data,EventOpts]),
 	    ok;
-	{cancel_timer,TimerRef} ->
-	    case erlang:cancel_timer(TimerRef) of
-		false ->
+	{insert_events,Events} ->
+	    [State,Q|P] = StateQP,
+	    continue(
+	      Parent, Debug, ModNam,
+	      [State,(Q ++ Events)|P],
+	      Data, Hib, EventOpts);
+	{filter,FilterFun} ->
+	    continue(
+	      Parent, Debug, ModNam, StateQP, Data,
+	      Hib, EventOpts, FilterFun);
+	{Type,Ref} ->
+	    case filter_fun(Type, Ref) of
+		{} ->
 		    continue(
-		      Parent, Debug, ModNam, StateQP, Data, Hib, EventOpts,
-		      fun
-			  ({timeout,TRef,_}) when TRef =:= TimerRef ->
-			      false;
-			  (_) ->
-			      true
-		      end);
-		_ ->
+		      Parent, Debug, ModNam, StateQP, Data,
+		      Hib, EventOpts);
+		{Class,Reason,Stacktrace} ->
+		    terminate(
+		      Class, Reason, Stacktrace, Debug,
+		      ModNam, StateQP, Data);
+		FilterFun ->
 		    continue(
-		      Parent, Debug, ModNam, StateQP, Data, Hib, EventOpts)
-	    end
-%%% ToDo: insert_events, demonitor, unlink
+		      Parent, Debug, ModNam, StateQP, Data,
+		      Hib, EventOpts, FilterFun)
+	    end;
+	_ ->
+	    terminate(
+	      {bad_event_opt,EventOpt},
+	      Debug, ModNam, StateQP, Data)
     end;
 continue(Parent, Debug, ModNam, StateQP, Data, Hib, []) ->
-    continue(Parent, Debug, ModNam, StateQP, Data, Hib).
+    continue(Parent, Debug, ModNam, StateQP, Data, Hib);
+continue(_Parent, Debug, ModNam, StateQP, Data, _Hib, EventOpts) ->
+    terminate(
+      {bad_event_opt_list,EventOpts}, Debug, ModNam, StateQP, Data).
 %%
 %% Filter state due to one EventOpt then continue with the rest
 continue(
-  Parent, Debug, ModNam, [State,Q|P], Data, Hib, EventOpts, FilterFun) ->
-    continue(
-      Parent, Debug, ModNam,
-      [State,[E || E <- Q, FilterFun(E)]|[E || E <- P, FilterFun(E)]],
-      Data, Hib, EventOpts).
-      %% 	S#state{
-      %% 	  queue = queue:filter(FilterFun, Q),
-      %% 	  postponed = queue:filter(FilterFun, P)},
-      %% Data, Hib, EventOpts).
+  Parent, Debug, ModNam, [State,Q|P] = StateQP, Data, Hib,
+  EventOpts, FilterFun) ->
+    try [[E || E <- Q, FilterFun(E)]|[E || E <- P, FilterFun(E)]] of
+	QP ->
+	    continue(
+	      Parent, Debug, ModNam, [State,QP], Data, Hib, EventOpts)
+    catch
+	Class:Reason ->
+	    terminate(
+	      Class, Reason, erlang:get_stacktrace(),
+	      Debug, ModNam, StateQP, Data)
+    end.
 %%
 %% Continue with traversing all queued events or receiving a new message
 continue(Parent, Debug, ModNam, [State,Q|P] = StateQP, Data, Hib) ->
@@ -376,50 +451,117 @@ continue(Parent, Debug, ModNam, [State,Q|P] = StateQP, Data, Hib) ->
 	      Parent, Debug, ModNam, [State,Events|P], Data, Hib, Event)
     end.
 
+filter_fun(cancel_timer, TimerRef) ->
+    try erlang:cancel_timer(TimerRef) of
+	TimeLeft when is_integer(TimeLeft) ->
+	    {};
+	false ->
+	    receive
+		{timeout,TimerRef,_} ->
+		    ok
+	    after 0 ->
+		    ok
+	    end,
+	    fun
+		({timeout,TRef,_}) when TRef =:= TimerRef ->
+		    false;
+		(_) ->
+		    true
+	    end
+    catch
+	Class:Reason ->
+	    {Class,Reason,erlang:get_stacktrace()}
+    end;
+filter_fun(demonitor, MonitorRef) ->
+    try erlang:demonitor(MonitorRef, [flush,info]) of
+	false ->
+	    {};
+	true ->
+	    fun ({'DOWN',MRef,_,_,_}) when MRef =:= MonitorRef->
+		    false;
+		(_) ->
+		    true
+	    end
+    catch
+	Class:Reason ->
+	    {Class,Reason,erlang:get_stacktrace()}
+    end;
+filter_fun(unlink, Id) ->
+    try unlink(Id) of
+	true ->
+	    receive
+		{'EXIT',Id,_} ->
+		    ok
+	    after 0 ->
+		    ok
+	    end,
+	    fun ({'EXIT',I,_}) when I =:= Id ->
+		    false;
+		(_) ->
+		    true
+	    end
+    catch
+	Class:Reason ->
+	    {Class,Reason,erlang:get_stacktrace()}
+    end.
 
 
+
+terminate(Reason, Debug, ModNam, StateQP, Data) ->
+    terminate(exit, Reason, [], Debug, ModNam, StateQP, Data).
+%%
 terminate(
-  Reason, Debug, [Module|_Name] = ModNam, [State|_] = StateQP, Data) ->
+  Class, Reason, Stacktrace, Debug,
+  [Module|_Name] = ModNam, [State|_] = StateQP, Data) ->
     try Module:terminate(Reason, State, Data) of
 	_ -> ok
     catch
 	_ -> ok;
-	_:R ->
+	C:R ->
+	    ST = erlang:get_stacktrace(),
 	    error_info(
-	      {Reason,erlang:get_stacktrace()},
+	      C, R, ST,
 	      Debug, ModNam, StateQP,
 	      format_status(terminate, get(), State, Data, Module)),
-	    exit(R)
+	    erlang:raise(C, R, ST)
     end,
     case Reason of
-	normal ->
-	    exit(normal);
-	shutdown ->
-	    exit(shutdown);
-	{shutdown,_} = Shutdown->
-	    exit(Shutdown);
+	normal -> ok;
+	shutdown -> ok;
+	{shutdown,_} -> ok;
 	_ ->
 	    error_info(
-	      Reason, Debug, ModNam, StateQP,
-	      format_status(terminate, get(), State, Data, Module)),
-	    exit(Reason)
+	      Class, Reason, Stacktrace, Debug, ModNam, StateQP,
+	      format_status(terminate, get(), State, Data, Module))
+    end,
+    case Stacktrace of
+	[] ->
+	    erlang:Class(Reason);
+	_ ->
+	    erlang:raise(Class, Reason, Stacktrace)
     end.
 
-error_info(Reason, Debug, [_Module|Name], [State,Q|_P], FmtData) ->
-    FixedReason =
-	case Reason of
-	    {undef,[{M,F,As,_}|_]=ST} ->
+error_info(
+  Class, Reason, Stacktrace, Debug,
+  [_Module|Name], [State,Q|_P], FmtData) ->
+    {FixedReason,FixedStacktrace} =
+	case Stacktrace of
+	    [{M,F,Args,_}|ST]
+	      when Class =:= error, Reason =:= undef ->
 		case code:is_loaded(M) of
 		    false ->
-			{'module could not be loaded',ST};
+			{{'module could not be loaded',M},ST};
 		    true ->
-			case erlang:function_exported(M, F, length(As)) of
-			    true -> Reason;
+			Arity = length(Args),
+			case erlang:function_exported(M, F, Arity) of
+			    true ->
+				{Reason,Stacktrace};
 			    false ->
-				{'function not exported',ST}
+				{{'function not exported',{M,F,Arity}},
+				 ST}
 			end
 		end;
-	    _ -> Reason
+	    _ -> {Reason,Stacktrace}
 	end,
     error_logger:format(
       "** State machine ~p terminating~n" ++
@@ -427,19 +569,31 @@ error_info(Reason, Debug, [_Module|Name], [State,Q|_P], FmtData) ->
 	      [] ->
 		  "";
 	      _ ->
-		  "** Last event was ~p~n"
+		  "** Last event = ~p~n"
 	  end ++
 	  "** When State  = ~p~n" ++
 	  "**   Data = ~p~n" ++
-	  "** Reason for termination =~n" ++
-	  "**   ~p~n",
+	  "** Reason for termination = ~w:~p~n" ++
+	  case FixedStacktrace of
+	      [] ->
+		  "";
+	      _ ->
+		  "** Stacktrace =~n"
+		      "**  ~p~n"
+	  end,
       [Name |
        case Q of
 	   [] ->
-	       [State,FmtData,FixedReason];
+	       [State,FmtData,Class,FixedReason];
 	   [Event|_] ->
-	       [Event,State,FmtData,FixedReason]
-       end]),
+	       [Event,State,FmtData,Class,FixedReason]
+       end] ++
+	  case FixedStacktrace of
+	      [] ->
+		  [];
+	      _ ->
+		  [FixedStacktrace]
+	  end),
     sys:print_log(Debug),
     ok.
 
@@ -503,26 +657,24 @@ handle_event(
 	    handle_event(
 	      Parent, Debug, ModNam, StateQP, Data, Hib, Event, Result);
 	error:undef ->
+	    StateEQP = [State,[Event|Q]|P],
 	    case erlang:get_stacktrace() of
-		[{Module,State,[Event,Data],_} = MFAL|_] ->
+		[{Module,State,[Event,Data]=Args,_}|Stacktrace] ->
 		    terminate(
-		      {'state function undefined',MFAL},
-		      Debug, ModNam,
-		      [State,[Event|Q]|P],
-		      Data);
+		      error,
+		      {undef_state_function,{Module,State,Args}},
+		      Stacktrace,
+		      Debug, ModNam, StateEQP, Data);
 		Stacktrace ->
 		    terminate(
-		      {undef,Stacktrace},
-		      Debug, ModNam,
-		      [State,[Event|Q]|P],
-		      Data)
+		      error, undef, Stacktrace,
+		      Debug, ModNam, StateEQP, Data)
 	    end;
-	_:Reason ->
+	Class:Reason ->
+	    Stacktrace = erlang:get_stacktrace(),
+	    StateEQP = [State,[Event|Q]|P],
 	    terminate(
-	      {Reason,erlang:get_stacktrace()},
-	      Debug, ModNam,
-	      [State,[Event|Q]|P],
-	      Data)
+	      Class, Reason, Stacktrace, Debug, ModNam, StateEQP, Data)
     end.
 %%
 handle_event(
