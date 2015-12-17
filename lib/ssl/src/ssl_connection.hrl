@@ -73,7 +73,8 @@
           user_data_buffer     :: undefined | binary() | secret_printout(), 
 	  renegotiation        :: undefined | {boolean(), From::term() | internal | peer},
 	  start_or_recv_from   :: term(),
-	  timer                :: undefined | reference(), % start_or_recive_timer
+	  timer                :: undefined | reference(), % start_or_recive_timer,
+	  hibernate_timer      :: undefined | reference(),
 	  send_queue           :: queue:queue(),
 	  terminated = false                          ::boolean(),
 	  allow_renegotiate = true                    ::boolean(),

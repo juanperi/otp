@@ -47,10 +47,10 @@
 	 connection_information/1
 	]).
 
--export([handle_session/7]).
+-export([handle_session/7, hibernate_after/1]).
 
 %% SSL FSM state functions 
--export([hello/3, abbreviated/3, certify/3, cipher/3, connection/3]).
+-export([hello/6, abbreviated/6, certify/6, cipher/6, connection/6]).
 %% SSL all state functions 
 -export([handle_sync_event/4, handle_info/3, terminate/3, format_status/2]).
 
@@ -292,47 +292,64 @@ handle_session(#server_hello{cipher_suite = CipherSuite,
     end.
 	
 %%--------------------------------------------------------------------
--spec hello(start | #hello_request{} | #server_hello{} | term(),
-	    #state{}, tls_connection | dtls_connection) ->
-		   gen_fsm_state_return().
+%% -spec hello(start | #hello_request{} | #server_hello{} | term(),
+%% 	    #state{}, tls_connection | dtls_connection) ->
+%% 		   gen_fsm_state_return().
 %%--------------------------------------------------------------------
-hello(start, #state{role = server} = State0, Connection) ->
+
+hello({call, From}, {start, Timeout}, _, StateName, 
+      #state{role = Role = server, ssl_options = SslOpts} = State0, Connection) ->
+    try 
+	State1 = ssl_config(SslOpts, Role, State0),
+	Timer = start_or_recv_cancel_timer(Timeout, From),
+	{Record, State} = Connection:next_record(State1#state{start_or_recv_from = From,
+							      timer = Timer}),
+	Connection:next_state(hello, hello, Record, State)
+    catch throw:Error ->
+	    {StateName, State0, [{reply, From, {error, Error}}, {stop, normal}]}
+    end;
+hello({call, From}, {start, {Opts, EmOpts}, Timeout}, PrevStateName, StateName, State, Connection) ->
+    hello({call, From}, {start, Timeout}, PrevStateName, StateName, State#state{socket_options = EmOpts,
+										ssl_options = Opts}, Connection); 
+hello({call, From}, Msg, _, StateName, State, _Connection) ->
+    handle_sync_event(Msg, From, StateName, State);
+
+hello(event, #hello_request{}, _, _,#state{role = client} = State0, Connection) ->
     {Record, State} = Connection:next_record(State0),
     Connection:next_state(hello, hello, Record, State);
 
-hello(#hello_request{}, #state{role = client} = State0, Connection) ->
-    {Record, State} = Connection:next_record(State0),
-    Connection:next_state(hello, hello, Record, State);
-
-hello({common_client_hello, Type, ServerHelloExt, NegotiatedHashSign},
-      State, Connection) ->
+hello(event, {common_client_hello, Type, ServerHelloExt, NegotiatedHashSign},
+      _, _, State, Connection) ->
     do_server_hello(Type, ServerHelloExt,
 		    %% Note NegotiatedHashSign is only negotiated for real if
 		    %% if TLS version is at least TLS-1.2 
 		    State#state{hashsign_algorithm = NegotiatedHashSign}, Connection);
 
-hello(timeout, State, _) ->
-    {next_state, hello, State, hibernate};
+hello(info, {timeout, _TRef, hibernate}, _, StateName, State, _) ->
+    {StateName, State, [hibernate]};
 
-hello(Msg, State, Connection) ->
-    Connection:handle_unexpected_message(Msg, hello, State).
+hello(Type, Msg, PrevStateName, StateName, State, Connection) ->
+    Connection:handle_unexpected_message(Type, Msg, PrevStateName, StateName, State).
 
 %%--------------------------------------------------------------------
--spec abbreviated(#hello_request{} | #finished{} | term(),
-		  #state{}, tls_connection | dtls_connection) ->
-			 gen_fsm_state_return().
+%% -spec abbreviated(#hello_request{} | #finished{} | term(),
+%% 		  #state{}, tls_connection | dtls_connection) ->
+%% 			 gen_fsm_state_return().
 %%--------------------------------------------------------------------
-abbreviated(#hello_request{}, State0, Connection) ->
+abbreviated({call, From}, Msg, _, StateName, State, _Connection) ->
+    handle_sync_event(Msg, From, StateName, State);
+
+abbreviated(event, #hello_request{}, _, _, State0, Connection) ->
     {Record, State} = Connection:next_record(State0),
     Connection:next_state(abbreviated, hello, Record, State);
 
-abbreviated(#finished{verify_data = Data} = Finished,
-	    #state{role = server,
-		   negotiated_version = Version,
-		   expecting_finished = true,
-		   tls_handshake_history = Handshake,
-		   session = #session{master_secret = MasterSecret},
-		   connection_states = ConnectionStates0} =
+abbreviated(event, #finished{verify_data = Data} = Finished,
+	    _,_, #state{role = server,
+			negotiated_version = Version,
+			expecting_finished = true,
+			tls_handshake_history = Handshake,
+			session = #session{master_secret = MasterSecret},
+			connection_states = ConnectionStates0} =
 		State, Connection) ->
     case ssl_handshake:verify_connection(Version, Finished, client,
 					 get_current_prf(ConnectionStates0, write),
@@ -348,7 +365,7 @@ abbreviated(#finished{verify_data = Data} = Finished,
 	    Connection:handle_own_alert(Alert, Version, abbreviated, State)
     end;
 
-abbreviated(#finished{verify_data = Data} = Finished,
+abbreviated(event, #finished{verify_data = Data} = Finished, _ , _,
 	    #state{role = client, tls_handshake_history = Handshake0,
 		   session = #session{master_secret = MasterSecret},
 		   negotiated_version = Version,
@@ -370,29 +387,32 @@ abbreviated(#finished{verify_data = Data} = Finished,
 
 %% only allowed to send next_protocol message after change cipher spec
 %% & before finished message and it is not allowed during renegotiation
-abbreviated(#next_protocol{selected_protocol = SelectedProtocol},
+abbreviated(event, #next_protocol{selected_protocol = SelectedProtocol}, _, _,
 	    #state{role = server, expecting_next_protocol_negotiation = true} = State0,
 	    Connection) ->
     {Record, State} = Connection:next_record(State0#state{negotiated_protocol = SelectedProtocol}),
     Connection:next_state(abbreviated, abbreviated, Record, State#state{expecting_next_protocol_negotiation = false});
 
-abbreviated(timeout, State, _) ->
-    {next_state, abbreviated, State, hibernate };
+abbreviated(info, {timeout, _TRef, hibernate}, _, StateName, State, _) ->
+    {StateName, State, [hibernate]};
 
-abbreviated(Msg, State, Connection) ->
-    Connection:handle_unexpected_message(Msg, abbreviated, State).
+abbreviated(Type, Msg, PrevStateName, StateName, State, Connection) ->
+    Connection:handle_unexpected_message(Type, Msg, PrevStateName, StateName, State).
 
 %%--------------------------------------------------------------------
--spec certify(#hello_request{} | #certificate{} |  #server_key_exchange{} |
-	      #certificate_request{} | #server_hello_done{} | #client_key_exchange{} | term(),
-	      #state{}, tls_connection | dtls_connection) ->
-		     gen_fsm_state_return().
+%% -spec certify(#hello_request{} | #certificate{} |  #server_key_exchange{} |
+%% 	      #certificate_request{} | #server_hello_done{} | #client_key_exchange{} | term(),
+%% 	      #state{}, tls_connection | dtls_connection) ->
+%% 		     gen_fsm_state_return().
 %%--------------------------------------------------------------------
-certify(#hello_request{}, State0, Connection) ->
+certify({call, From}, Msg, _, StateName, State, _Connection) ->
+    handle_sync_event(Msg, From, StateName, State);
+
+certify(event, #hello_request{}, _, _, State0, Connection) ->
     {Record, State} = Connection:next_record(State0),
     Connection:next_state(certify, hello, Record, State);
 
-certify(#certificate{asn1_certificates = []},
+certify(event, #certificate{asn1_certificates = []}, _, _,
 	#state{role = server, negotiated_version = Version,
 	       ssl_options = #ssl_options{verify = verify_peer,
 					  fail_if_no_peer_cert = true}} =
@@ -400,15 +420,15 @@ certify(#certificate{asn1_certificates = []},
     Alert =  ?ALERT_REC(?FATAL,?HANDSHAKE_FAILURE),
     Connection:handle_own_alert(Alert, Version, certify, State);
 
-certify(#certificate{asn1_certificates = []},
+certify(event, #certificate{asn1_certificates = []}, _,_,
 	#state{role = server,
 	       ssl_options = #ssl_options{verify = verify_peer,
 					  fail_if_no_peer_cert = false}} =
-	State0, Connection) ->
+	    State0, Connection) ->
     {Record, State} = Connection:next_record(State0#state{client_certificate_requested = false}),
     Connection:next_state(certify, certify, Record, State);
 
-certify(#certificate{} = Cert,
+certify(event, #certificate{} = Cert, _, _,
         #state{negotiated_version = Version,
 	       role = Role,
 	       cert_db = CertDbHandle,
@@ -430,7 +450,7 @@ certify(#certificate{} = Cert,
             Connection:handle_own_alert(Alert, Version, certify, State)
     end;
 
-certify(#server_key_exchange{exchange_keys = Keys},
+certify(event, #server_key_exchange{exchange_keys = Keys}, _,_,
         #state{role = client, negotiated_version = Version,
 	       key_algorithm = Alg,
 	       public_key_info = PubKeyInfo,
@@ -458,20 +478,20 @@ certify(#server_key_exchange{exchange_keys = Keys},
 	    end
     end;
 
-certify(#server_key_exchange{} = Msg,
+certify(event = Type, #server_key_exchange{} = Msg, PrevStateName, StateName,
         #state{role = client, key_algorithm = rsa} = State, Connection) ->
-    Connection:handle_unexpected_message(Msg, certify_server_keyexchange, State);
+    Connection:handle_unexpected_message(Type, Msg, PrevStateName, StateName, State);
 
-certify(#certificate_request{hashsign_algorithms = HashSigns},
+certify(event, #certificate_request{hashsign_algorithms = HashSigns}, _, _,
 	#state{session = #session{own_certificate = Cert},
-        negotiated_version = Version} = State0, Connection) ->
+	       negotiated_version = Version} = State0, Connection) ->
     HashSign = ssl_handshake:select_hashsign(HashSigns, Cert, Version),
     {Record, State} = Connection:next_record(State0#state{client_certificate_requested = true}),
     Connection:next_state(certify, certify, Record,
 			  State#state{cert_hashsign_algorithm = HashSign});
 
 %% PSK and RSA_PSK might bypass the Server-Key-Exchange
-certify(#server_hello_done{},
+certify(event, #server_hello_done{}, _,_, 
 	#state{session = #session{master_secret = undefined},
 	       negotiated_version = Version,
 	       psk_identity = PSKIdentity,
@@ -489,7 +509,7 @@ certify(#server_hello_done{},
 	    client_certify_and_key_exchange(State, Connection)
     end;
 
-certify(#server_hello_done{},
+certify(event, #server_hello_done{}, _, _,
 	#state{session = #session{master_secret = undefined},
 	       ssl_options = #ssl_options{user_lookup_fun = PSKLookup},
 	       negotiated_version = {Major, Minor},
@@ -509,7 +529,7 @@ certify(#server_hello_done{},
     end;
 
 %% Master secret was determined with help of server-key exchange msg
-certify(#server_hello_done{},
+certify(event, #server_hello_done{}, _,_,
 	#state{session = #session{master_secret = MasterSecret} = Session,
 	       connection_states = ConnectionStates0,
 	       negotiated_version = Version,
@@ -525,7 +545,7 @@ certify(#server_hello_done{},
     end;
 
 %% Master secret is calculated from premaster_secret
-certify(#server_hello_done{},
+certify(event, #server_hello_done{}, _, _,
 	#state{session = Session0,
 	       connection_states = ConnectionStates0,
 	       negotiated_version = Version,
@@ -542,14 +562,14 @@ certify(#server_hello_done{},
 	    Connection:handle_own_alert(Alert, Version, certify, State0)
     end;
 
-certify(#client_key_exchange{} = Msg,
+certify(event = Type, #client_key_exchange{} = Msg, PrevStateName, StateName,
 	#state{role = server,
 	       client_certificate_requested = true,
 	       ssl_options = #ssl_options{fail_if_no_peer_cert = true}} = State, Connection) ->
     %% We expect a certificate here
-    Connection:handle_unexpected_message(Msg, certify_client_key_exchange, State);
+    Connection:handle_unexpected_message(Type, Msg, PrevStateName, StateName, State);
 
-certify(#client_key_exchange{exchange_keys = Keys},
+certify(event, #client_key_exchange{exchange_keys = Keys}, _, _,
 	State = #state{key_algorithm = KeyAlg, negotiated_version = Version}, Connection) ->
     try
 	certify_client_key_exchange(ssl_handshake:decode_client_key(Keys, KeyAlg, Version),
@@ -559,22 +579,25 @@ certify(#client_key_exchange{exchange_keys = Keys},
 	    Connection:handle_own_alert(Alert, Version, certify, State)
     end;
 
-certify(timeout, State, _) ->
-    {next_state, certify, State, hibernate};
+certify(info, {timeout, _TRef, hibernate}, _, StateName, State, _) ->
+    {StateName, State, [hibernate]};
 
-certify(Msg, State, Connection) ->
-    Connection:handle_unexpected_message(Msg, certify, State).
+certify(Type, Msg, PrevStateName, StateName, State, Connection) ->
+    Connection:handle_unexpected_message(Type, Msg, PrevStateName, StateName, State).
 
 %%--------------------------------------------------------------------
--spec cipher(#hello_request{} | #certificate_verify{} | #finished{} | term(),
-	     #state{}, tls_connection | dtls_connection) ->
-		    gen_fsm_state_return().
+%% -spec cipher(#hello_request{} | #certificate_verify{} | #finished{} | term(),
+%% 	     #state{}, tls_connection | dtls_connection) ->
+%% 		    gen_fsm_state_return().
 %%--------------------------------------------------------------------
-cipher(#hello_request{}, State0, Connection) ->
+cipher({call, From}, Msg, _, StateName, State, _Connection) ->
+    handle_sync_event(Msg, From, StateName, State);
+
+cipher(event, #hello_request{}, _, _, State0, Connection) ->
     {Record, State} = Connection:next_record(State0),
     Connection:next_state(cipher, hello, Record, State);
 
-cipher(#certificate_verify{signature = Signature, hashsign_algorithm = CertHashSign},
+cipher(event, #certificate_verify{signature = Signature, hashsign_algorithm = CertHashSign}, _, _,
        #state{role = server,
 	      public_key_info = {Algo, _, _} =PublicKeyInfo,
 	      negotiated_version = Version,
@@ -594,12 +617,13 @@ cipher(#certificate_verify{signature = Signature, hashsign_algorithm = CertHashS
     end;
 
 %% client must send a next protocol message if we are expecting it
-cipher(#finished{}, #state{role = server, expecting_next_protocol_negotiation = true,
-			   negotiated_protocol = undefined, negotiated_version = Version} = State0,
+cipher(event, #finished{}, _, StateName,
+       #state{role = server, expecting_next_protocol_negotiation = true,
+	      negotiated_protocol = undefined, negotiated_version = Version} = State0,
        Connection) ->
-    Connection:handle_own_alert(?ALERT_REC(?FATAL,?UNEXPECTED_MESSAGE), Version, cipher, State0);
+    Connection:handle_own_alert(?ALERT_REC(?FATAL,?UNEXPECTED_MESSAGE), Version, StateName, State0);
 
-cipher(#finished{verify_data = Data} = Finished,
+cipher(event, #finished{verify_data = Data} = Finished, _, StateName,
        #state{negotiated_version = Version,
 	      host = Host,
 	      port = Port,
@@ -617,74 +641,55 @@ cipher(#finished{verify_data = Data} = Finished,
 	    Session = register_session(Role, Host, Port, Session0),
 	    cipher_role(Role, Data, Session, State#state{expecting_finished = false}, Connection);
         #alert{} = Alert ->
-	    Connection:handle_own_alert(Alert, Version, cipher, State)
+	    Connection:handle_own_alert(Alert, Version, StateName, State)
     end;
 
 %% only allowed to send next_protocol message after change cipher spec
 %% & before finished message and it is not allowed during renegotiation
-cipher(#next_protocol{selected_protocol = SelectedProtocol},
+cipher(event, #next_protocol{selected_protocol = SelectedProtocol}, _, StateName,
        #state{role = server, expecting_next_protocol_negotiation = true,
 	      expecting_finished = true} = State0, Connection) ->
     {Record, State} = Connection:next_record(State0#state{negotiated_protocol = SelectedProtocol}),
-    Connection:next_state(cipher, cipher, Record, State#state{expecting_next_protocol_negotiation = false});
+    Connection:next_state(StateName, StateName, Record, State#state{expecting_next_protocol_negotiation = false});
 
-cipher(timeout, State, _) ->
-    {next_state, cipher, State, hibernate};
+cipher(info, {timeout, _TRef, hibernate}, _, StateName, State, _) ->
+    {StateName, State, [hibernate]};
 
-cipher(Msg, State, Connection) ->
-    Connection:handle_unexpected_message(Msg, cipher, State).
+cipher(Type, Msg, PrevStateName, StateName, State, Connection) ->
+    Connection:handle_unexpected_message(Type, Msg, PrevStateName, StateName, State).
 
 %%--------------------------------------------------------------------
--spec connection(term(), #state{}, tls_connection | dtls_connection) ->
-			gen_fsm_state_return().
+%% -spec connection(term(), #state{}, tls_connection | dtls_connection) ->
+%% 			gen_fsm_state_return().
 %%--------------------------------------------------------------------
-connection(timeout, State,  _) ->
-    {next_state, connection, State, hibernate};
-
-connection(Msg, State, Connection) ->
-    Connection:handle_unexpected_message(Msg, connection, State).
+connection({call, From}, Msg, _, StateName, State, _Connection) ->
+    handle_sync_event(Msg, From, StateName, State);
+connection(info, {timeout, _TRef, hibernate}, _, StateName, State, _) ->
+    {StateName, State, [hibernate]};
+connection(Type, Msg, PrevStateName, StateName, State, Connection) ->
+    Connection:handle_unexpected_message(Type, Msg, PrevStateName, StateName, State).
 
 %%--------------------------------------------------------------------
 %% Description: Whenever a gen_fsm receives an event sent using
 %% gen_fsm:sync_send_all_state_event/2,3, this function is called to handle
 %% the event.
 %%--------------------------------------------------------------------
-handle_sync_event({application_data, Data}, From, connection,  
-		  #state{protocol_cb = Connection} = State) ->
+handle_sync_event({application_data, Data}, From, connection = StateName,  
+		  #state{protocol_cb = Connection, hibernate_timer = Timer} = State) ->
     %% We should look into having a worker process to do this to 
     %% parallize send and receive decoding and not block the receiver
     %% if sending is overloading the socket.
     try
 	Connection:write_application_data(Data, From, State)
     catch throw:Error ->
-	    {reply, Error, connection, State, get_timeout(State)}
+	    {StateName, hibernate_after(State), [{reply, From, Error} | handle_hibernate_timer(Timer)]}
     end;
 handle_sync_event({application_data, Data}, From, StateName, 
-		  #state{send_queue = Queue} = State) ->
+		  #state{send_queue = Queue, hibernate_timer = Timer} = State) ->
     %% In renegotiation priorities handshake, send data when handshake is finished
-    {next_state, StateName,
-     State#state{send_queue = queue:in({From, Data}, Queue)},
-     get_timeout(State)};
-
-handle_sync_event({start, Timeout}, StartFrom, hello, #state{role = Role,
-							     protocol_cb = Connection, 
-							     ssl_options = SSLOpts} = State0) ->
-    try 
-	State = ssl_config(SSLOpts, Role, State0),
-	Timer = start_or_recv_cancel_timer(Timeout, StartFrom),
-	Connection:hello(start, State#state{start_or_recv_from = StartFrom,
-					    timer = Timer})
-    catch throw:Error ->
-	    {stop, normal, {error, Error}, State0}
-    end;
-
-handle_sync_event({start, {Opts, EmOpts}, Timeout}, From, StateName, State) ->
-    try 
-	handle_sync_event({start, Timeout}, From, StateName, State#state{socket_options = EmOpts,
-									 ssl_options = Opts})
-    catch throw:Error ->
-	    {stop, normal, {error, Error}, State}
-    end;	
+    {StateName,
+     hibernate_after(State#state{send_queue = queue:in({From, Data}, Queue)}),
+     handle_hibernate_timer(Timer)};
 
 %% These two clauses below could happen if a server upgrades a socket in
 %% active mode. Note that in this case we are lucky that
@@ -694,30 +699,31 @@ handle_sync_event({start, {Opts, EmOpts}, Timeout}, From, StateName, State) ->
 %% and before calling ssl:ssl_accept/2. These clauses are 
 %% here to make sure it is the users problem and not owers if
 %% they upgrade an active socket. 
-handle_sync_event({start,_}, _, connection, State) ->
-    {reply, connected, connection, State, get_timeout(State)};
+%% handle_sync_event({start,_}, _, connection, State) ->
+%%     {reply, connected, connection, State, get_timeout(State)};
+%%
+%% handle_sync_event({start, Timeout}, StartFrom, StateName,  #state{role = Role, ssl_options = SslOpts} = State0) ->
+%%     try 
+%% 	State = ssl_config(SslOpts, Role, State0),
+%% 	Timer = start_or_recv_cancel_timer(Timeout, StartFrom),
+%% 	{next_state, StateName, State#state{start_or_recv_from = StartFrom,
+%% 					    timer = Timer}, get_timeout(State)}
+%%     catch throw:Error ->
+%% 	    {stop, normal, {error, Error}, State0}
+%%     end;	
 
-handle_sync_event({start, Timeout}, StartFrom, StateName,  #state{role = Role, ssl_options = SslOpts} = State0) ->
-    try 
-	State = ssl_config(SslOpts, Role, State0),
-	Timer = start_or_recv_cancel_timer(Timeout, StartFrom),
-	{next_state, StateName, State#state{start_or_recv_from = StartFrom,
-					    timer = Timer}, get_timeout(State)}
-    catch throw:Error ->
-	    {stop, normal, {error, Error}, State0}
-    end;	
-
-handle_sync_event({close, _} = Close, _, StateName, #state{protocol_cb = Connection} = State) ->
+handle_sync_event({close, _} = Close, From, StateName, #state{protocol_cb = Connection} = State) ->
     %% Run terminate before returning so that the reuseaddr
     %% inet-option and possible downgrade will work as intended.
     Result = Connection:terminate(Close, StateName, State),
-    {stop, normal, Result, State#state{terminated = true}};
+    {StateName, State#state{terminated = true}, [{reply, From, Result}, {stop, normal}]};
 
-handle_sync_event({shutdown, How0}, _, StateName,
+handle_sync_event({shutdown, How0}, From, StateName,
 		  #state{transport_cb = Transport,
 			 negotiated_version = Version,
 			 connection_states = ConnectionStates,
-			 socket = Socket} = State) ->
+			 socket = Socket,
+			 hibernate_timer = Timer} = State) ->
     case How0 of
 	How when How == write; How == both ->	    
 	    Alert = ?ALERT_REC(?WARNING, ?CLOSE_NOTIFY),
@@ -729,14 +735,16 @@ handle_sync_event({shutdown, How0}, _, StateName,
     end,
     
     case Transport:shutdown(Socket, How0) of
-	ok ->
-	    {reply, ok, StateName, State, get_timeout(State)};
+	ok -> 
+	    {StateName, hibernate_after(State), [{reply, From, ok} | handle_hibernate_timer(Timer)]};
 	Error ->
-	    {stop, normal, Error, State}
+	    {StateName, State, [{reply, From, {error, Error}}, {stop, normal}]}
     end;
-handle_sync_event({recv, _N, _Timeout}, _RecvFrom, StateName,  
-		  #state{socket_options = #socket_options{active = Active}} = State) when Active =/= false ->
-    {reply, {error, einval}, StateName, State, get_timeout(State)};
+handle_sync_event({recv, _N, _Timeout}, RecvFrom, StateName,  
+		  #state{socket_options = #socket_options{active = Active},
+			 hibernate_timer = Timer} = State) when Active =/= false ->
+    {StateName, hibernate_after(State), [{reply, RecvFrom, {error, einval}} | handle_hibernate_timer(Timer)]};
+
 handle_sync_event({recv, N, Timeout}, RecvFrom, connection = StateName,  
 		  #state{protocol_cb = Connection} = State0) ->
     Timer = start_or_recv_cancel_timer(Timeout, RecvFrom),
@@ -744,38 +752,46 @@ handle_sync_event({recv, N, Timeout}, RecvFrom, connection = StateName,
 					    start_or_recv_from = RecvFrom, timer = Timer}, StateName);
 %% Doing renegotiate wait with handling request until renegotiate is
 %% finished. Will be handled by next_state_is_connection/2.
-handle_sync_event({recv, N, Timeout}, RecvFrom, StateName, State) ->
+handle_sync_event({recv, N, Timeout}, RecvFrom, StateName, #state{hibernate_timer = HTimer} =State) ->
     Timer = start_or_recv_cancel_timer(Timeout, RecvFrom),
-    {next_state, StateName, State#state{bytes_to_read = N, start_or_recv_from = RecvFrom,
-					timer = Timer},
-     get_timeout(State)};
-handle_sync_event({new_user, User}, _From, StateName, 
-		  State =#state{user_application = {OldMon, _}}) ->
+    {StateName, State#state{bytes_to_read = N, start_or_recv_from = RecvFrom,
+			    timer = Timer},  handle_hibernate_timer(HTimer)};
+handle_sync_event({new_user, User}, From, StateName, 
+		  State = #state{user_application = {OldMon, _},
+				 hibernate_timer = Timer}) ->
     NewMon = erlang:monitor(process, User),
     erlang:demonitor(OldMon, [flush]),
-    {reply, ok, StateName, State#state{user_application = {NewMon,User}},
-     get_timeout(State)};
-handle_sync_event({get_opts, OptTags}, _From, StateName,
+    {StateName, hibernate_after(State#state{user_application = {NewMon,User}}),
+     [{reply, From, ok} | handle_hibernate_timer(Timer)]};
+handle_sync_event({get_opts, OptTags}, From, StateName,
 		  #state{socket = Socket,
 			 transport_cb = Transport,
-			 socket_options = SockOpts} = State) ->
+			 socket_options = SockOpts,
+			 hibernate_timer = Timer} = State) ->
     OptsReply = get_socket_opts(Transport, Socket, OptTags, SockOpts, []),
-    {reply, OptsReply, StateName, State, get_timeout(State)};
-handle_sync_event(negotiated_protocol, _From, StateName, #state{negotiated_protocol = undefined} = State) ->
-    {reply, {error, protocol_not_negotiated}, StateName, State, get_timeout(State)};
-handle_sync_event(negotiated_protocol, _From, StateName, #state{negotiated_protocol = SelectedProtocol} = State) ->
-    {reply, {ok, SelectedProtocol}, StateName, State, get_timeout(State)};
-handle_sync_event({set_opts, Opts0}, _From, StateName0, 
+    {StateName, hibernate_after(State),
+     [{reply, From, OptsReply} |  handle_hibernate_timer(Timer)]};
+handle_sync_event(negotiated_protocol, From, StateName, #state{negotiated_protocol = undefined,
+							      hibernate_timer = Timer} = State) ->
+    {StateName, hibernate_after(State),
+     [{reply, From, {error, protocol_not_negotiated}} | handle_hibernate_timer(Timer)]};
+handle_sync_event(negotiated_protocol, From, StateName, #state{negotiated_protocol = SelectedProtocol,
+							       hibernate_timer = Timer} = State) ->
+    {StateName, hibernate_after(State),
+     [{reply, From, {ok, SelectedProtocol}} | handle_hibernate_timer(Timer)]};
+handle_sync_event({set_opts, Opts0}, From, StateName0, 
 		  #state{socket_options = Opts1, 
 			 protocol_cb = Connection,
 			 socket = Socket,
 			 transport_cb = Transport,
-			 user_data_buffer = Buffer} = State0) ->
+			 user_data_buffer = Buffer,
+			 hibernate_timer = Timer} = State0) ->
     {Reply, Opts} = set_socket_opts(Transport, Socket, Opts0, Opts1, []),
     State1 = State0#state{socket_options = Opts},
     if 
 	Opts#socket_options.active =:= false ->
-	    {reply, Reply, StateName0, State1, get_timeout(State1)};
+	    {StateName0, hibernate_after(State1), 
+	     [{reply, From, Reply} | handle_hibernate_timer(Timer)]};
 	Buffer =:= <<>>, Opts1#socket_options.active =:= false ->
             %% Need data, set active once
 	    {Record, State2} = Connection:next_record_if_active(State1),
@@ -787,8 +803,9 @@ handle_sync_event({set_opts, Opts0}, _From, StateName0,
 		    {stop, Reason, State}
 	    end;
 	Buffer =:= <<>> ->
-            %% Active once already set 
-	    {reply, Reply, StateName0, State1, get_timeout(State1)};
+            %% Active once already set   
+	    {StateName0, hibernate_after(State1), 
+	    [{reply, From, Reply} | handle_hibernate_timer(Timer)]};
 	true ->
 	    case Connection:read_application_data(<<>>, State1) of
 		Stop = {stop,_,_} ->
@@ -805,11 +822,13 @@ handle_sync_event({set_opts, Opts0}, _From, StateName0,
     end;
 handle_sync_event(renegotiate, From, connection,  #state{protocol_cb = Connection} = State) ->
     Connection:renegotiate(State#state{renegotiation = {true, From}});
-handle_sync_event(renegotiate, _, StateName, State) ->
-    {reply, {error, already_renegotiating}, StateName, State, get_timeout(State)};
-handle_sync_event({prf, Secret, Label, Seed, WantedLength}, _, StateName,
+handle_sync_event(renegotiate, From, StateName, #state{hibernate_timer = Timer} = State) ->
+    {StateName, hibernate_after(State), [{reply, From, {error, already_renegotiating}}
+					 | handle_hibernate_timer(Timer)]};
+handle_sync_event({prf, Secret, Label, Seed, WantedLength}, From, StateName,
 		  #state{connection_states = ConnectionStates,
-			 negotiated_version = Version} = State) ->
+			 negotiated_version = Version,
+			 hibernate_timer = Timer} = State) ->
     ConnectionState =
 	ssl_record:current_connection_state(ConnectionStates, read),
     SecParams = ConnectionState#connection_state.security_parameters,
@@ -831,20 +850,26 @@ handle_sync_event({prf, Secret, Label, Seed, WantedLength}, _, StateName,
 		exit:_ -> {error, badarg};
 		error:Reason -> {error, Reason}
 	    end,
-    {reply, Reply, StateName, State, get_timeout(State)};
-handle_sync_event(session_info, _, StateName, 
+    {StateName, hibernate_after(State), [{reply, From, Reply} | handle_hibernate_timer(Timer)]};
+handle_sync_event(session_info, From, StateName, 
 		  #state{session = #session{session_id = Id,
-					    cipher_suite = Suite}} = State) ->
-    {reply, [{session_id, Id}, 
-	     {cipher_suite, ssl:suite_definition(Suite)}],
-     StateName, State, get_timeout(State)};
-handle_sync_event(peer_certificate, _, StateName, 
-		  #state{session = #session{peer_certificate = Cert}} 
-		  = State) ->
-    {reply, {ok, Cert}, StateName, State, get_timeout(State)};
-handle_sync_event(connection_information, _, StateName, #state{sni_hostname = SNIHostname, session = #session{cipher_suite = CipherSuite}, negotiated_version = Version} = State) ->
-    {reply, {ok, [{protocol, tls_record:protocol_version(Version)}, {cipher_suite, ssl:suite_definition(CipherSuite)}, {sni_hostname, SNIHostname}]}, StateName, State, get_timeout(State)}.
-
+					    cipher_suite = Suite},
+			 hibernate_timer = Timer} = State) ->
+    Reply =  [{session_id, Id}, 
+	      {cipher_suite, ssl:suite_definition(Suite)}],
+    {StateName, hibernate_after(State), [{reply, From, Reply} | handle_hibernate_timer(Timer)]}; 
+handle_sync_event(peer_certificate, From, StateName, 
+		  #state{session = #session{peer_certificate = Cert}, 
+			hibernate_timer = Timer} = State) ->
+    {StateName, hibernate_after(State), [{reply, From,  {ok, Cert}} | handle_hibernate_timer(Timer)]}; 
+handle_sync_event(connection_information, From, StateName, 
+		  #state{sni_hostname = SNIHostname, 
+			 session = #session{cipher_suite = CipherSuite}, 
+			 negotiated_version = Version,
+			 hibernate_timer = Timer} = State) ->
+    Reply = {ok, [{protocol, tls_record:protocol_version(Version)}, 
+		  {cipher_suite, ssl:suite_definition(CipherSuite)}, {sni_hostname, SNIHostname}]},
+    {StateName, hibernate_after(State), [{reply, From, Reply} | handle_hibernate_timer(Timer)]}.
 
 handle_info({ErrorTag, Socket, econnaborted}, StateName,  
 	    #state{socket = Socket, transport_cb = Transport,
@@ -1659,7 +1684,7 @@ record_cb(dtls_connection) ->
     dtls_record.
 
 sync_send_all_state_event(FsmPid, Event) ->
-    try gen_fsm:sync_send_all_state_event(FsmPid, Event, infinity)
+    try gen_stm:call(FsmPid, Event)
     catch
  	exit:{noproc, _} ->
  	    {error, closed};
@@ -1759,10 +1784,16 @@ start_or_recv_cancel_timer(infinity, _RecvFrom) ->
 start_or_recv_cancel_timer(Timeout, RecvFrom) ->
     erlang:send_after(Timeout, self(), {cancel_start_or_recv, RecvFrom}).
 
-get_timeout(#state{ssl_options=#ssl_options{hibernate_after = undefined}}) ->
-    infinity;
-get_timeout(#state{ssl_options=#ssl_options{hibernate_after = HibernateAfter}}) ->
-    HibernateAfter.
+%% get_timeout(#state{ssl_options=#ssl_options{hibernate_after = undefined}}) ->
+%%     infinity;
+%% get_timeout(#state{ssl_options=#ssl_options{hibernate_after = HibernateAfter}}) ->
+%%     HibernateAfter.
+
+hibernate_after(#state{ssl_options=#ssl_options{hibernate_after = undefined}} = State) ->
+    State;
+hibernate_after(#state{ssl_options=#ssl_options{hibernate_after = HibernateAfter}} = State) ->
+    TRef = erlang:start_timer(HibernateAfter, self(), hibernate),
+    State#state{hibernate_timer = TRef}.
 
 terminate_alert(normal, Version, ConnectionStates)  ->
     ssl_alert:encode(?ALERT_REC(?WARNING, ?CLOSE_NOTIFY),
@@ -1885,3 +1916,7 @@ negotiated_hashsign(undefined, Alg, Version) ->
 negotiated_hashsign(HashSign = {_, _}, _, _) ->
     HashSign.
 
+handle_hibernate_timer(undefined) ->
+    [];
+handle_hibernate_timer(Timer) ->
+    [{cancel_timer, Timer}].
