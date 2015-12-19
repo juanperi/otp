@@ -181,7 +181,6 @@ hello(event, start, _, _, #state{host = Host, port = Port, role = client,
 			  tls_handshake_history = Handshake},
     {Record, State} = next_record(State1),
     next_state(hello, hello, Record, State);
-
 hello(event, Hello = #client_hello{client_version = ClientVersion,
 				   extensions = #hello_extensions{hash_signs = HashSigns,
 								  ec_point_formats = EcPointFormats,
@@ -270,7 +269,7 @@ connection(event, #client_hello{}, _, StateName, #state{role = server, allow_ren
     next_state_connection(StateName, State);
   
 connection(Type, Msg, PrevStateName, StateName, State) ->
-     ssl_connection:connection(Type, Msg, PrevStateName, StateName, State, tls_connection).
+     ssl_connection:connection(Type, Msg, PrevStateName, StateName, State, ?MODULE).
 
 %%--------------------------------------------------------------------
 %% Description: Whenever a gen_fsm receives an event sent using
@@ -302,7 +301,7 @@ handle_info({Protocol, _, Data}, StateName,
 	    next_state(StateName, StateName, Record, State);
 	#alert{} = Alert ->
 	    handle_normal_shutdown(Alert, StateName, State0), 
-	    {stop, {shutdown, own_alert}, State0}
+	    {StateName, State0, [{stop, {shutdown, own_alert}}]}
     end;
 
 handle_info({CloseTag, Socket}, StateName,
@@ -323,8 +322,8 @@ handle_info({CloseTag, Socket}, StateName,
 	    ok
     end,
     handle_normal_shutdown(?ALERT_REC(?FATAL, ?CLOSE_NOTIFY), StateName, State),
-    {stop, {shutdown, transport_closed}, State};
-
+    {StateName, State0, [{stop, {shutdown, transport_closed}}]};
+    
 handle_info(Msg, StateName, State) ->
     ssl_connection:handle_info(Msg, StateName, State).
 
@@ -740,7 +739,7 @@ header(N, Binary) ->
     [ByteN | header(N-1, NewBinary)].
 
 send_or_reply(false, _Pid, From, Data) when From =/= undefined ->
-    gen_fsm:reply(From, Data);
+    gen_stm:reply(From, Data);
 %% Can happen when handling own alert or tcp error/close and there is
 %% no outstanding gen_fsm sync events
 send_or_reply(false, no_pid, _, _) ->
