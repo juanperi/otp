@@ -325,7 +325,7 @@ hello(event, {common_client_hello, Type, ServerHelloExt, NegotiatedHashSign},
 		    %% if TLS version is at least TLS-1.2 
 		    State#state{hashsign_algorithm = NegotiatedHashSign}, Connection);
 
-hello(info, Msg _, StateName, State, _) ->
+hello(info, Msg, _, StateName, State, _) ->
     handle_info(Msg, StateName, State);
 
 hello(Type, Msg, PrevStateName, StateName, State, Connection) ->
@@ -633,7 +633,7 @@ cipher(event, #next_protocol{selected_protocol = SelectedProtocol}, _, StateName
     {Record, State} = Connection:next_record(State0#state{negotiated_protocol = SelectedProtocol}),
     Connection:next_state(StateName, StateName, Record, State#state{expecting_next_protocol_negotiation = false});
 
-cipher(info, {timeout, _TRef, hibernate}, _, StateName, State, _) ->
+cipher(info, Msg, _, StateName, State, _) ->
     handle_info(Msg, StateName, State);
 
 cipher(Type, Msg, PrevStateName, StateName, State, Connection) ->
@@ -646,7 +646,7 @@ cipher(Type, Msg, PrevStateName, StateName, State, Connection) ->
 connection({call, From}, Msg, _, StateName, State, _Connection) ->
     handle_sync_event(Msg, From, StateName, State);
 
-connection(info, {timeout, _TRef, hibernate}, _, StateName, State, _) ->
+connection(info, Msg, _, StateName, State, _) ->
     handle_info(Msg, StateName, State);
 
 connection(Type, Msg, PrevStateName, StateName, State, Connection) ->
@@ -855,7 +855,7 @@ handle_sync_event(connection_information, From, StateName,
     {StateName, hibernate_after(State), [{reply, From, Reply} | handle_hibernate_timer(Timer)]}.
 
 
-handle_info({timeout, _TRef, hibernate}; StateName, State)->
+handle_info({timeout, _TRef, hibernate}, StateName, State)->
     {StateName, State, [hibernate]};
 
 handle_info({ErrorTag, Socket, econnaborted}, StateName,  
@@ -865,7 +865,7 @@ handle_info({ErrorTag, Socket, econnaborted}, StateName,
 		   error_tag = ErrorTag,
 		   tracker = Tracker} = State)  when StateName =/= connection ->
     Connection:alert_user(Transport, Tracker,Socket, StartFrom, ?ALERT_REC(?FATAL, ?CLOSE_NOTIFY), Role),
-    {StateName, State [{stop, normal}]};
+    {StateName, State, [{stop, normal}]};
 
 handle_info({ErrorTag, Socket, Reason}, StateName, #state{socket = Socket,
 							  protocol_cb = Connection,
@@ -873,19 +873,20 @@ handle_info({ErrorTag, Socket, Reason}, StateName, #state{socket = Socket,
     Report = io_lib:format("SSL: Socket error: ~p ~n", [Reason]),
     error_logger:info_report(Report),
     Connection:handle_normal_shutdown(?ALERT_REC(?FATAL, ?CLOSE_NOTIFY), StateName, State),
-    {StateName, State [{stop, normal}]};
+    {StateName, State, [{stop, normal}]};
 
-handle_info({'DOWN', MonitorRef, _, _, _}, _, 
-	    State = #state{user_application={MonitorRef,_Pid}}) ->
+handle_info({'DOWN', MonitorRef, _, _, _}, StateName, 
+	    State = #state{user_application={MonitorRef,_Pid},
+			   protocol_cb = Connection}) ->
     Connection:handle_normal_shutdown(?ALERT_REC(?FATAL, ?CLOSE_NOTIFY), StateName, State),
-    {StateName, State [{stop, normal}]};
+    {StateName, State, [{stop, normal}]};
 
 %%% So that terminate will be run when supervisor issues shutdown
-handle_info({'EXIT', _Sup, shutdown}, _StateName, State) ->
-    {StateName, State [{stop, shutdown}]};
-handle_info({'EXIT', Socket, normal}, _StateName, #state{socket = Socket} = State) ->
+handle_info({'EXIT', _Sup, shutdown}, StateName, State) ->
+    {StateName, State, [{stop, shutdown}]};
+handle_info({'EXIT', Socket, normal}, StateName, #state{socket = Socket} = State) ->
     %% Handle as transport close"
-    {StateName, State [{stop, {shutdown, transport_closed}}]};
+    {StateName, State, [{stop, {shutdown, transport_closed}}]};
 
 handle_info(allow_renegotiate, StateName, #state{hibernate_timer = Timer} = State) ->
     {StateName,  hibernate_after(State#state{allow_renegotiate = true}),  handle_hibernate_timer(Timer)};
@@ -894,10 +895,11 @@ handle_info({cancel_start_or_recv, StartFrom}, StateName,
 	    #state{renegotiation = {false, first}} = State) when StateName =/= connection ->
     {StateName, State#state{timer = undefined}, [{reply, StartFrom, {error, timeout}}, {stop, {shutdown, user_timeout}}]};
 
-handle_info({cancel_start_or_recv, RecvFrom}, StateName, #state{start_or_recv_from = RecvFrom} = State) ->
+handle_info({cancel_start_or_recv, RecvFrom}, StateName, #state{start_or_recv_from = RecvFrom, 
+								hibernate_timer = Timer} = State) ->
     {StateName, hibernate_after(State#state{start_or_recv_from = undefined,
 					    bytes_to_read = undefined,
-					    timer = undefined}), [{reply, RecvFrom, {error, timeout}} | handle_hibernate_timer(Timer)};
+					    timer = undefined}), [{reply, RecvFrom, {error, timeout}} | handle_hibernate_timer(Timer)]};
 
 handle_info({cancel_start_or_recv, _RecvFrom}, StateName,  #state{hibernate_timer = Timer} = State) ->
     {StateName, hibernate_after(State#state{timer = undefined}),  handle_hibernate_timer(Timer)};

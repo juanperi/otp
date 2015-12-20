@@ -66,7 +66,7 @@
 
 %% gen_stm callbacks
 -export([init/1, hello/5, certify/5, cipher/5,
-	 abbreviated/5, connection/5, handle_event/3,
+	 abbreviated/5, connection/5, %%handle_event/3,
          handle_sync_event/4, handle_info/3, terminate/3, code_change/4, format_status/2]).
 
 %%====================================================================
@@ -322,7 +322,7 @@ handle_info({CloseTag, Socket}, StateName,
 	    ok
     end,
     handle_normal_shutdown(?ALERT_REC(?FATAL, ?CLOSE_NOTIFY), StateName, State),
-    {StateName, State0, [{stop, {shutdown, transport_closed}}]};
+    {StateName, State, [{stop, {shutdown, transport_closed}}]};
     
 handle_info(Msg, StateName, State) ->
     ssl_connection:handle_info(Msg, StateName, State).
@@ -786,8 +786,7 @@ write_application_data(Data0, From,
 	false ->
 	    {Msgs, ConnectionStates} = ssl_record:encode_data(Data, Version, ConnectionStates0),
 	    Result = Transport:send(Socket, Msgs),
-	    {reply, Result,
-	     connection, State#state{connection_states = ConnectionStates}, get_timeout(State)}
+	    {connection, ssl_connection:hibernate_after(State#state{connection_states = ConnectionStates}), [{reply, From, Result}]}
     end.
 
 encode_packet(Data, #socket_options{packet=Packet}) ->
@@ -950,7 +949,7 @@ handle_normal_shutdown(Alert, StateName, #state{socket = Socket,
 						start_or_recv_from = RecvFrom, role = Role}) ->
     alert_user(Transport, Tracker, Socket, StateName, Opts, Pid, RecvFrom, Alert, Role).
 
-handle_unexpected_message(Type, Msg, _, StateName, #state{negotiated_version = Version} = State) ->
+handle_unexpected_message(_Type, Msg, _, StateName, #state{negotiated_version = Version} = State) ->
     Alert =  ?ALERT_REC(?FATAL,?UNEXPECTED_MESSAGE),
     handle_own_alert(Alert, Version, {StateName, Msg}, State).
 
