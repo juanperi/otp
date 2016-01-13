@@ -338,7 +338,7 @@ certify(#certificate{asn1_certificates = ASN1Certs}, CertDbHandle, CertDbRef,
         Opts, CRLDbHandle, Role, Host) ->    
 
     ServerName = server_name(Opts#ssl_options.server_name_indication, Host, Role),
-    [PeerCert | _] = ASN1Certs,       
+    [PeerCert | ChainCerts ] = ASN1Certs,       
     try
 	{TrustedCert, CertPath}  =
 	    ssl_certificate:trusted_cert_and_path(ASN1Certs, CertDbHandle, CertDbRef,  
@@ -347,14 +347,13 @@ certify(#certificate{asn1_certificates = ASN1Certs}, CertDbHandle, CertDbRef,
                                                          CertDbHandle, CertDbRef, ServerName,
                                                          Opts#ssl_options.customize_hostname_check,
                                                          Opts#ssl_options.crl_check, CRLDbHandle, CertPath),
-	case public_key:pkix_path_validation(TrustedCert,
-					     CertPath,
-					     [{max_path_length,  Opts#ssl_options.depth},
-					      {verify_fun, ValidationFunAndState}]) of
+        Options = [{max_path_length, Opts#ssl_options.depth},
+                   {verify_fun, ValidationFunAndState}],
+	case public_key:pkix_path_validation(TrustedCert, CertPath, Options) of
 	    {ok, {PublicKeyInfo,_}} ->
 		{PeerCert, PublicKeyInfo};
 	    {error, Reason} ->
-		path_validation_alert(Reason)
+		handle_path_validation_error(Reason, PeerCert, ChainCerts, Opts, Options, CertDbHandle, CertDbRef)
 	end
     catch
 	error:{badmatch,{asn1, Asn1Reason}} ->
@@ -363,7 +362,6 @@ certify(#certificate{asn1_certificates = ASN1Certs}, CertDbHandle, CertDbRef,
         error:OtherReason ->
             ?ALERT_REC(?FATAL, ?INTERNAL_ERROR, {unexpected_error, OtherReason})
     end.
-
 %%--------------------------------------------------------------------
 -spec certificate_verify(binary(), public_key_info(), ssl_record:ssl_version(), term(),
 			 binary(), ssl_handshake_history()) -> valid | #alert{}.
@@ -1309,6 +1307,28 @@ apply_user_fun(Fun, OtpCert, ExtensionOrError, UserState0, SslState, _CertPath) 
 	{unknown, UserState} ->
 	    {unknown, {SslState, UserState}}
     end.
+
+handle_path_validation_error(Reason, _, [], _, _, _, _) ->
+    path_validation_alert(Reason);
+handle_path_validation_error({bad_cert, Error} = Reason, PeerCert, Chain0, 
+			     Opts, Options, CertDbHandle, CertsDbRef)  when Error == unknown_ca;
+                                                                            Error == invalid_issuer ->
+    case ssl_certificate:certificate_chain(PeerCert, CertDbHandle, CertsDbRef, Chain0) of
+	{ok, _, [PeerCert | Chain0]} -> %% Chain was already in order
+	    path_validation_alert(Reason);
+	{ok, Root, Chain} -> %% Orded chain 
+            {Trusted, Path} = ssl_certificate:trusted_cert_and_path([Root | Chain], 
+                                                                    CertDbHandle, CertsDbRef,
+                                                                    Opts#ssl_options.partial_chain),
+            case public_key:pkix_path_validation(Trusted, Path, Options) of
+		{ok, {PublicKeyInfo,_}} ->
+		    {PeerCert, PublicKeyInfo};
+		{error, PathError} ->
+		    path_validation_alert(PathError)
+	    end
+    end;
+handle_path_validation_error(Reason, _, _, _, _,_, _) ->
+    path_validation_alert(Reason).
 
 path_validation_alert({bad_cert, cert_expired}) ->
     ?ALERT_REC(?FATAL, ?CERTIFICATE_EXPIRED);
