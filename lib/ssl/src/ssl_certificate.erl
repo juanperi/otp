@@ -33,6 +33,7 @@
 
 -export([trusted_cert_and_path/4,
 	 certificate_chain/3,
+	 certificate_chain/4,
 	 file_to_certificats/2,
 	 file_to_crls/2,
 	 validate/3,
@@ -94,10 +95,23 @@ certificate_chain(undefined, _, _) ->
     {error, no_cert};
 certificate_chain(OwnCert, CertDbHandle, CertsDbRef) when is_binary(OwnCert) ->
     ErlCert = public_key:pkix_decode_cert(OwnCert, otp),
-    certificate_chain(ErlCert, OwnCert, CertDbHandle, CertsDbRef, [OwnCert]);
+    certificate_chain(ErlCert, OwnCert, CertDbHandle, CertsDbRef, [OwnCert], []);
 certificate_chain(OwnCert, CertDbHandle, CertsDbRef) ->
     DerCert = public_key:pkix_encode('OTPCertificate', OwnCert, otp),
-    certificate_chain(OwnCert, DerCert, CertDbHandle, CertsDbRef, [DerCert]).
+    certificate_chain(OwnCert, DerCert, CertDbHandle, CertsDbRef, [DerCert], []).
+
+%%--------------------------------------------------------------------
+-spec certificate_chain(undefined | binary() | #'OTPCertificate'{} , db_handle(), certdb_ref(), [der_cert()]) ->
+			  {error, no_cert} | {ok, #'OTPCertificate'{} | undefined, [der_cert()]}.
+%%
+%% Description: Create certificate chain with certs from 
+%%--------------------------------------------------------------------
+certificate_chain(Cert, CertDbHandle, CertsDbRef, Candidates) when is_binary(Cert) ->
+    ErlCert = public_key:pkix_decode_cert(Cert, otp),
+    certificate_chain(ErlCert, Cert, CertDbHandle, CertsDbRef, [Cert], Candidates);
+certificate_chain(Cert, CertDbHandle, CertsDbRef, Candidates) ->
+    DerCert = public_key:pkix_encode('OTPCertificate', Cert, otp),
+    certificate_chain(Cert, DerCert, CertDbHandle, CertsDbRef, [DerCert], Candidates).
 %%--------------------------------------------------------------------
 -spec file_to_certificats(binary(), term()) -> [der_cert()].
 %%
@@ -187,7 +201,7 @@ public_key_type(?'id-ecPublicKey') ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
-certificate_chain(OtpCert, _Cert, CertDbHandle, CertsDbRef, Chain) ->
+certificate_chain(OtpCert, _Cert, CertDbHandle, CertsDbRef, Chain, ListDb) ->
     IssuerAndSelfSigned = 
 	case public_key:pkix_is_self_signed(OtpCert) of
 	    true ->
@@ -198,12 +212,12 @@ certificate_chain(OtpCert, _Cert, CertDbHandle, CertsDbRef, Chain) ->
     
     case IssuerAndSelfSigned of 
 	{_, true = SelfSigned} ->
-	    certificate_chain(CertDbHandle, CertsDbRef, Chain, ignore, ignore, SelfSigned);
+	    do_certificate_chain(CertDbHandle, CertsDbRef, Chain, ignore, ignore, SelfSigned, ListDb);
 	{{error, issuer_not_found}, SelfSigned} ->
-	    case find_issuer(OtpCert, CertDbHandle) of
+	    case find_issuer(OtpCert, CertDbHandle, ListDb) of
 		{ok, {SerialNr, Issuer}} ->
-		    certificate_chain(CertDbHandle, CertsDbRef, Chain,
-				      SerialNr, Issuer, SelfSigned);
+		    do_certificate_chain(CertDbHandle, CertsDbRef, Chain,
+					 SerialNr, Issuer, SelfSigned, ListDb);
 		_ ->
 		    %% Guess the the issuer must be the root
 		    %% certificate. The verification of the
@@ -212,19 +226,19 @@ certificate_chain(OtpCert, _Cert, CertDbHandle, CertsDbRef, Chain) ->
 		    {ok, undefined, lists:reverse(Chain)}
 	    end;
 	{{ok, {SerialNr, Issuer}}, SelfSigned} -> 
-	    certificate_chain(CertDbHandle, CertsDbRef, Chain, SerialNr, Issuer, SelfSigned)
+	    do_certificate_chain(CertDbHandle, CertsDbRef, Chain, SerialNr, Issuer, SelfSigned, ListDb)
     end.
   
-certificate_chain(_, _, [RootCert | _] = Chain, _, _, true) ->	  
+do_certificate_chain(_, _, [RootCert | _] = Chain, _, _, true, _) ->	  
     {ok, RootCert, lists:reverse(Chain)};		      
 
-certificate_chain(CertDbHandle, CertsDbRef, Chain, SerialNr, Issuer, _SelfSigned) ->
+do_certificate_chain(CertDbHandle, CertsDbRef, Chain, SerialNr, Issuer, _, ListDb) ->
     case ssl_manager:lookup_trusted_cert(CertDbHandle, CertsDbRef,
 						SerialNr, Issuer) of
 	{ok, {IssuerCert, ErlCert}} ->
 	    ErlCert = public_key:pkix_decode_cert(IssuerCert, otp),
 	    certificate_chain(ErlCert, IssuerCert, 
-			      CertDbHandle, CertsDbRef, [IssuerCert | Chain]);
+			      CertDbHandle, CertsDbRef, [IssuerCert | Chain], ListDb);
 	_ ->
 	    %% The trusted cert may be obmitted from the chain as the
 	    %% counter part needs to have it anyway to be able to
@@ -232,7 +246,7 @@ certificate_chain(CertDbHandle, CertsDbRef, Chain, SerialNr, Issuer, _SelfSigned
 	    {ok, undefined, lists:reverse(Chain)}		      
     end.
 
-find_issuer(OtpCert, CertDbHandle) ->
+find_issuer(OtpCert, CertDbHandle, ListDb) ->
     IsIssuerFun =
 	fun({_Key, {_Der, #'OTPCertificate'{} = ErlCertCandidate}}, Acc) ->
 		case public_key:pkix_is_issuer(OtpCert, ErlCertCandidate) of
@@ -250,13 +264,18 @@ find_issuer(OtpCert, CertDbHandle) ->
 		Acc
 	end,
 
-    try ssl_pkix_db:foldl(IsIssuerFun, issuer_not_found, CertDbHandle) of
+    try do_find_issuer(IsIssuerFun, CertDbHandle, ListDb) of
 	issuer_not_found ->
 	    {error, issuer_not_found}
     catch 
 	{ok, _IssuerId} = Return ->
 	    Return
     end.
+
+do_find_issuer(IsIssuerFun, CertDbHandle, []) ->
+    ssl_pkix_db:foldl(IsIssuerFun, issuer_not_found, CertDbHandle);
+do_find_issuer(IsIssuerFun, _, [_|_] = ListDb) ->
+    lists:foldl(IsIssuerFun, issuer_not_found, ListDb).
 
 is_valid_extkey_usage(KeyUse, client) ->
     %% Client wants to verify server
@@ -286,7 +305,7 @@ other_issuer(OtpCert, CertDbHandle) ->
 	{ok, IssuerId} ->
 	    {other, IssuerId};
 	{error, issuer_not_found} ->
-	    case find_issuer(OtpCert, CertDbHandle) of
+	    case find_issuer(OtpCert, CertDbHandle, []) of
 		{ok, IssuerId} ->
 		    {other, IssuerId};
 		Other ->

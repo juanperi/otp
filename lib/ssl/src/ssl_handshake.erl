@@ -392,7 +392,7 @@ verify_signature(_Version, Hash, {HashAlgo, ecdsa}, Signature,
 %%--------------------------------------------------------------------
 certify(#certificate{asn1_certificates = ASN1Certs}, CertDbHandle, CertDbRef,
 	MaxPathLen, _Verify, ValidationFunAndState0, PartialChain, CRLCheck, CRLDbHandle, Role) ->
-    [PeerCert | _] = ASN1Certs,
+    [PeerCert | ChainCerts] = ASN1Certs,
         
     ValidationFunAndState = validation_fun_and_state(ValidationFunAndState0, Role, 
 						     CertDbHandle, CertDbRef,  CRLCheck, CRLDbHandle),
@@ -400,14 +400,13 @@ certify(#certificate{asn1_certificates = ASN1Certs}, CertDbHandle, CertDbRef,
     try
 	{TrustedCert, CertPath}  =
 	    ssl_certificate:trusted_cert_and_path(ASN1Certs, CertDbHandle, CertDbRef, PartialChain),
-	case public_key:pkix_path_validation(TrustedCert,
-					     CertPath,
-					     [{max_path_length, MaxPathLen},
-					      {verify_fun, ValidationFunAndState}]) of
+	Options = [{max_path_length, MaxPathLen},
+		   {verify_fun, ValidationFunAndState}],
+	case public_key:pkix_path_validation(TrustedCert, CertPath, Options) of
 	    {ok, {PublicKeyInfo,_}} ->
 		{PeerCert, PublicKeyInfo};
 	    {error, Reason} ->
-		path_validation_alert(Reason)
+		handle_path_validation_error(Reason, PeerCert, ChainCerts, Options, CertDbHandle, CertDbRef)
 	end
     catch
 	error:_ ->
@@ -1469,6 +1468,27 @@ apply_user_fun(Fun, OtpCert, ExtensionOrError, UserState0, SslState) ->
 	{unknown, UserState} ->
 	    {unknown, {SslState, UserState}}
     end.
+
+handle_path_validation_error(Reason, _, [], _, _, _) ->
+    path_validation_alert(Reason);
+handle_path_validation_error({bad_cert, Error} = Reason, PeerCert, Chain0, 
+			     Options, CertDbHandle, CertsDbRef)  when Error == unknown_ca;
+								      Error == invalid_issuer ->
+    case ssl_certificate:certificate_chain(PeerCert, CertDbHandle, CertsDbRef, Chain0) of
+	{ok, undefined, _} ->
+	    path_validation_alert(Reason);
+	{ok, _, [PeerCert | Chain0]} -> %% Chain was already in order
+	    path_validation_alert(Reason);
+	{ok, Root, Chain} -> %% Orded chain
+	    case public_key:pkix_path_validation(Root, Chain, Options) of
+		{ok, {PublicKeyInfo,_}} ->
+		    {PeerCert, PublicKeyInfo};
+		{error, PathError} ->
+		    path_validation_alert(PathError)
+	    end
+    end;
+handle_path_validation_error(Reason, _, _, _, _,_) ->
+    path_validation_alert(Reason).
 
 path_validation_alert({bad_cert, cert_expired}) ->
     ?ALERT_REC(?FATAL, ?CERTIFICATE_EXPIRED);
