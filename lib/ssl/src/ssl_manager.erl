@@ -54,7 +54,8 @@
 	  session_validation_timer,
 	  last_delay_timer  = {undefined, undefined},%% Keep for testing purposes
 	  last_pem_check,
-	  clear_pem_cache 
+	  clear_pem_cache,
+	  session_validators
 	 }).
 
 -define(GEN_UNIQUE_ID_MAX_TRIES, 10).
@@ -250,7 +251,8 @@ init([Name, Opts]) ->
 		session_lifetime = SessionLifeTime,
 		session_validation_timer = Timer,
 		last_pem_check =  os:timestamp(),
-		clear_pem_cache = Interval 	
+		clear_pem_cache = Interval,
+		session_validators = {undefined, undefined}
 	       }}.
 
 %%--------------------------------------------------------------------
@@ -378,13 +380,14 @@ handle_cast({invalidate_pem, File},
 handle_info(validate_sessions, #state{session_cache_cb = CacheCb,
 				      session_cache_client = ClientCache,
 				      session_cache_server = ServerCache,
-				      session_lifetime = LifeTime
+				      session_lifetime = LifeTime,
+				      session_validators = {Client, Server},
 				     } = State) ->
     Timer = erlang:send_after(?SESSION_VALIDATION_INTERVAL, 
 			      self(), validate_sessions),
-    start_session_validator(ClientCache, CacheCb, LifeTime),
-    start_session_validator(ServerCache, CacheCb, LifeTime),
-    {noreply, State#state{session_validation_timer = Timer}};
+    CPid = start_session_validator(ClientCache, CacheCb, LifeTime, Client),
+    SPid = start_session_validator(ServerCache, CacheCb, LifeTime, Server),
+    {noreply, State#state{session_validation_timer = Timer, session_validators = {CPid, SPid}}};
 
 
 handle_info({delayed_clean_session, Key, Cache}, #state{session_cache_cb = CacheCb
@@ -411,10 +414,11 @@ handle_info({clean_cert_db, Ref, File},
     end,
     {noreply, State};
 
-handle_info({'EXIT', _, _}, State) ->
-    %% Session validator died!! Do we need to take any action?
-    %% maybe error log
-    {noreply, State};
+handle_info({'EXIT', Pid, _}, #state{session_validators = {Pid, Other} = State) ->
+    {noreply, State#state{session_validators = {undefined, Other}};
+
+handle_info({'EXIT', Pid, _}, #state{session_validators = {Other, Pid} = State) ->
+    {noreply, State#state{session_validators = {Other, undefined}};
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -471,9 +475,11 @@ validate_session(Port, Session, LifeTime) ->
 	    invalidate_session(Port, Session)
     end.
 		    
-start_session_validator(Cache, CacheCb, LifeTime) ->
+start_session_validator(Cache, CacheCb, LifeTime, undefined) ->
     spawn_link(?MODULE, init_session_validator, 
-	       [[get(ssl_manager), Cache, CacheCb, LifeTime]]).
+	       [[get(ssl_manager), Cache, CacheCb, LifeTime]]);
+start_session_validator(_,_,_, Pid) ->
+    Pid.
 
 init_session_validator([SslManagerName, Cache, CacheCb, LifeTime]) ->
     put(ssl_manager, SslManagerName),
