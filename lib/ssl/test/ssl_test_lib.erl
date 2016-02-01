@@ -1224,7 +1224,7 @@ filter_suites(Ciphers0) ->
 	++ ssl_cipher:srp_suites() 
 	++ ssl_cipher:rc4_suites(Version),
     Supported1 = ssl_cipher:filter_suites(Supported0),
-    Supported2 = [ssl:suite_definition(S) || S <- Supported1],
+    Supported2 = [ssl_cipher:erl_suite_definition(S) || S <- Supported1],
     [Cipher || Cipher <- Ciphers0, lists:member(Cipher, Supported2)].
 
 -define(OPENSSL_QUIT, "Q\n").
