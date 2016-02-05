@@ -31,7 +31,8 @@
 
 -export([master_secret/4, finished/5, certificate_verify/3, mac_hash/7,
 	 setup_keys/8, suites/1, prf/5,
-	 ecc_curves/1, oid_to_enum/1, enum_to_oid/1]).
+	 ecc_curves/1, oid_to_enum/1, enum_to_oid/1, 
+	 default_hash_signs/1, hash_signs/2, hashes/1]).
 
 %%====================================================================
 %% Internal application API
@@ -257,6 +258,40 @@ suites(3) ->
      %% ?TLS_DH_DSS_WITH_AES_128_GCM_SHA256
     ] ++ suites(2).
 
+
+
+hash_signs({3, 3}, HashSigns) ->
+    CryptoSupports =  crypto:supports(),
+    Hashes = proplists:get_value(hashs, CryptoSupports),
+    PubKeys = proplists:get_value(public_keys, CryptoSupports),
+    Supported = lists:foldl(fun({Hash, Sign} = Alg, Acc) -> 
+				    case proplists:get_bool(Sign, PubKeys) 
+					andalso proplists:get_bool(Hash, Hashes) of
+					true ->
+					    [Alg | Acc];
+					false ->
+					    []
+				    end
+			    end, [], HashSigns),
+    lists:reverse(Supported).
+
+default_hash_signs({3, 3} = Version) ->
+    Default = [%% SHA2
+	       {sha512, ecdsa},
+	       {sha512, rsa},
+	       {sha384, ecdsa},
+	       {sha384, rsa},
+	       {sha256, ecdsa},
+	       {sha256, rsa},
+	       {sha224, ecdsa},
+	       {sha224, rsa},
+	       %% SHA
+	       {sha, ecdsa},
+	       {sha, rsa},
+	       {sha, dsa},
+	       %% MD5
+	       {md5, rsa}],
+    hash_signs(Version, HashSigns).
 
 %%--------------------------------------------------------------------
 %%% Internal functions

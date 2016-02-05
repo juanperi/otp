@@ -198,20 +198,18 @@ hello(Hello = #client_hello{client_version = ClientVersion,
             handle_own_alert(Alert, ClientVersion, hello, State);
         {Version, {Type, Session},
 	 ConnectionStates, Protocol0, ServerHelloExt} ->
-
 	    Protocol = case Protocol0 of
-		undefined -> CurrentProtocol;
-		_ -> Protocol0
-	    end,
-
-            HashSign = ssl_handshake:select_hashsign(HashSigns, Cert, Version),
-            ssl_connection:hello({common_client_hello, Type, ServerHelloExt, HashSign},
+			   undefined -> CurrentProtocol;
+			   _ -> Protocol0
+		       end,
+	    ssl_connection:hello({common_client_hello, Type, ServerHelloExt},
 				 State#state{connection_states  = ConnectionStates,
 					     negotiated_version = Version,
 					     session = Session,
 					     client_ecc = {EllipticCurves, EcPointFormats},
 					     negotiated_protocol = Protocol}, ?MODULE)
     end;
+
 hello(Hello = #server_hello{},
       #state{connection_states = ConnectionStates0,
 	     negotiated_version = ReqVersion,
@@ -1069,3 +1067,4 @@ handle_sni_extension(#client_hello{extensions = HelloExtensions}, State0) ->
     end;
 handle_sni_extension(_, State0) ->
     State0.
+
