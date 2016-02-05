@@ -58,7 +58,7 @@ all() ->
 groups() ->
     [{basic, [], basic_tests()},
      {options, [], options_tests()},
-     {'tlsv1.2', [], all_versions_groups()},
+     {'tlsv1.2', [], all_versions_groups() ++ [conf_hash_signs, no_common_hash_signs]},
      {'tlsv1.1', [], all_versions_groups()},
      {'tlsv1', [], all_versions_groups() ++ rizzo_tests()},
      {'sslv3', [], all_versions_groups() ++ rizzo_tests() ++ [ciphersuite_vs_version]},
@@ -2876,7 +2876,61 @@ ciphersuite_vs_version(Config) when is_list(Config) ->
 	_ ->
 	    ct:fail({unexpected_server_hello, ServerHello})
     end.
-										
+			
+%%--------------------------------------------------------------------
+conf_hash_signs() ->
+    [{doc,"Test to set the hash_signs option on both client and server"}].
+conf_hash_signs(Config) when is_list(Config) -> 
+    ClientOpts = ?config(client_opts, Config),
+    ServerOpts = ?config(server_opts, Config),
+    {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
+    Server = 
+	ssl_test_lib:start_server([{node, ServerNode}, {port, 0}, 
+				   {from, self()}, 
+				   {mfa, {ssl_test_lib, send_recv_result, []}},
+				   {options,  [{active, false}, {hash_signs, [{sha256, rsa}]} | ServerOpts]}]),
+    Port = ssl_test_lib:inet_port(Server),
+    Client = 
+	ssl_test_lib:start_client([{node, ClientNode}, {port, Port}, 
+				   {host, Hostname},
+				   {from, self()}, 
+				   {mfa, {ssl_test_lib, send_recv_result, []}},
+				   {options, [{active, false}, {hash_signs, [{sha256, rsa}]} | ClientOpts]}]),
+    
+    ct:log("Testcase ~p, Client ~p  Server ~p ~n",
+			 [self(), Client, Server]),
+    
+    ssl_test_lib:check_result(Server, ok, Client, ok),
+    
+    ssl_test_lib:close(Server),
+    ssl_test_lib:close(Client).
+
+
+%%--------------------------------------------------------------------
+no_common_hash_signs()  ->
+    [{doc,"Set the hash_signs option so that there client and server does not share any hash sign algorithms"}].
+no_common_hash_signs(Config) when is_list(Config) ->
+    
+    ClientOpts = ?config(client_opts, Config),
+    ServerOpts = ?config(server_opts, Config),
+
+    {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
+
+
+    Server = ssl_test_lib:start_server_error([{node, ServerNode}, {port, 0},
+					      {from, self()},
+					      {options, [{hash_signs, [{sha256, rsa}]}
+							 | ServerOpts]}]),
+    Port = ssl_test_lib:inet_port(Server),
+    Client = ssl_test_lib:start_client_error([{node, ClientNode}, {port, Port},
+					      {host, Hostname},
+					      {from, self()}, 
+					      {options, [{hash_signs, [{sha384, rsa}]}
+							 | ClientOpts]}]),
+    
+    ssl_test_lib:check_result(Server, {error, {tls_alert, "insufficient security"}},
+			      Client, {error, {tls_alert, "insufficient security"}}).
+    						
 %%--------------------------------------------------------------------
 
 dont_crash_on_handshake_garbage() ->

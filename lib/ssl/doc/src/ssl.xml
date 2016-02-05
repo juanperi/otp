@@ -421,7 +421,6 @@ fun(srp, Username :: string(), UserState :: term()) ->
 
         <warning><p>Using <c>{padding_check, boolean()}</c> makes TLS
 	vulnerable to the Poodle attack.</p></warning>
-
   </section>
   
   <section>
@@ -521,6 +520,13 @@ fun(srp, Username :: string(), UserState :: term()) ->
 	 <p>may use it to avoid undesired TLS version downgrade. Note that TLS_FALLBACK_SCSV must also
 	 be supported by the server for the prevention to work.
 	</p></warning>
+
+	<tag><c>{hash_signs, [{hash(), ecdsa | rsa | dsa}]}</c></tag>
+	<item><p>Affects TLS-1.2 connections, if now lower TLS versions are supported,
+	the algorithms will be advertised in the TLS signature algorithm extension,
+	and should be in prefered order.</p> </item>
+	
+
       </item>
     </taglist>
    </section>
@@ -651,6 +657,11 @@ fun(srp, Username :: string(), UserState :: term()) ->
       <item>If true, use the server's preference for cipher selection. If false
       (the default), use the client's preference.
       </item>
+      
+      <tag><c>{hash_signs, [{hash(), ecdsa | rsa | dsa}]}</c></tag>
+      <item><p>Affects TLS-1.2 connections. The algorithms will be the once accepted by the server, if the client wants to
+      negotiate these algorithms. The algorithms may also be offered to the client if a client certificate is requested.</p> </item>
+
     </taglist>
   </section>
   

@@ -56,7 +56,7 @@ client_hello(Host, Port, ConnectionStates,
     Version = tls_record:highest_protocol_version(Versions),
     Pending = ssl_record:pending_connection_state(ConnectionStates, read),
     SecParams = Pending#connection_state.security_parameters,
-    AvailableCipherSuites = ssl_handshake:available_suites(UserSuites, Version), 
+    AvailableCipherSuites = ssl_handshake:available_suites(UserSuites, Version),     
     Extensions = ssl_handshake:client_hello_extensions(Host, Version, 
 						       AvailableCipherSuites,
 						       SslOpts, ConnectionStates, Renegotiation),
@@ -152,14 +152,17 @@ handle_client_hello(Version, #client_hello{session_id = SugesstedId,
 				       cipher_suites = CipherSuites,
 				       compression_methods = Compressions,
 				       random = Random,
-				       extensions = #hello_extensions{elliptic_curves = Curves} = HelloExt},
-		#ssl_options{versions = Versions} = SslOpts,
+				       extensions = #hello_extensions{elliptic_curves = Curves,
+								      hash_signs = HashSigns} = HelloExt},
+		#ssl_options{versions = Versions,
+			     hash_signs = SupportedHashSigns} = SslOpts,
 	 {Port, Session0, Cache, CacheCb, ConnectionStates0, Cert}, Renegotiation) ->
     case tls_record:is_acceptable_version(Version, Versions) of
 	true ->
 	    ECCCurve = ssl_handshake:select_curve(Curves, ssl_handshake:supported_ecc(Version)),
+	    HashSign = ssl_handshake:select_hashsign(HashSigns, Cert, SupportedHashSigns, Version),
 	    {Type, #session{cipher_suite = CipherSuite} = Session1}
-		= ssl_handshake:select_session(SugesstedId, CipherSuites, Compressions,
+		= ssl_handshake:select_session(SugesstedId, CipherSuites, [HashSign], Compressions,
 					       Port, Session0#session{ecc = ECCCurve}, Version,
 					       SslOpts, Cache, CacheCb, Cert),
 	    case CipherSuite of 
@@ -168,7 +171,7 @@ handle_client_hello(Version, #client_hello{session_id = SugesstedId,
 		_ ->
 		    handle_client_hello_extensions(Version, Type, Random, CipherSuites, HelloExt,
 						   SslOpts, Session1, ConnectionStates0,
-						   Renegotiation)
+						   Renegotiation, HashSign)
 	    end;
 	false ->
 	    ?ALERT_REC(?FATAL, ?PROTOCOL_VERSION)
@@ -245,14 +248,14 @@ enc_handshake(HandshakeMsg, Version) ->
 
 
 handle_client_hello_extensions(Version, Type, Random, CipherSuites,
-			HelloExt, SslOpts, Session0, ConnectionStates0, Renegotiation) ->
+			HelloExt, SslOpts, Session0, ConnectionStates0, Renegotiation, HashSign) ->
     try ssl_handshake:handle_client_hello_extensions(tls_record, Random, CipherSuites,
 						     HelloExt, Version, SslOpts,
 						     Session0, ConnectionStates0, Renegotiation) of
 	#alert{} = Alert ->
 	    Alert;
 	{Session, ConnectionStates, Protocol, ServerHelloExt} ->
-	    {Version, {Type, Session}, ConnectionStates, Protocol, ServerHelloExt}
+	    {Version, {Type, Session}, ConnectionStates, Protocol, ServerHelloExt, HashSign}
     catch throw:Alert ->
 	    Alert
     end.

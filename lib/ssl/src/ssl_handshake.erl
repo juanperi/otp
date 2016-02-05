@@ -46,7 +46,7 @@
 
 %% Handshake messages
 -export([hello_request/0, server_hello/4, server_hello_done/0,
-	 certificate/4, certificate_request/4, key_exchange/3,
+	 certificate/4, certificate_request/5, key_exchange/3,
 	 finished/5,  next_protocol/1]).
 
 %% Handle handshake messages
@@ -64,8 +64,8 @@
 	]).
 
 %% Cipher suites handling
--export([available_suites/2, cipher_suites/2,
-	 select_session/10, supported_ecc/1]).
+-export([available_suites/2, available_hash_signs/3, cipher_suites/2,
+	 select_session/11, supported_ecc/1]).
 
 %% Extensions handling
 -export([client_hello_extensions/6,
@@ -74,7 +74,7 @@
 	]).
 
 %% MISC
--export([select_version/3, prf/5, select_hashsign/3, 
+-export([select_version/3, prf/5, select_hashsign/4, 
 	 select_hashsign_algs/2, select_hashsign_algs/3,
 	 premaster_secret/2, premaster_secret/3, premaster_secret/4]).
 
@@ -120,7 +120,8 @@ server_hello(SessionId, Version, ConnectionStates, Extensions) ->
 server_hello_done() ->
     #server_hello_done{}.
 
-client_hello_extensions(Host, Version, CipherSuites, SslOpts, ConnectionStates, Renegotiation) ->
+client_hello_extensions(Host, Version, CipherSuites, 
+			#ssl_options{hash_signs = SupportedHashSigns, versions = AllVersions} = SslOpts, ConnectionStates, Renegotiation) ->
     {EcPointFormats, EllipticCurves} =
 	case advertises_ec_ciphers(lists:map(fun ssl_cipher:suite_definition/1, CipherSuites)) of
 	    true ->
@@ -134,7 +135,7 @@ client_hello_extensions(Host, Version, CipherSuites, SslOpts, ConnectionStates, 
        renegotiation_info = renegotiation_info(tls_record, client,
 					       ConnectionStates, Renegotiation),
        srp = SRP,
-       hash_signs = advertised_hash_signs(Version),
+       hash_signs = available_hash_signs(SupportedHashSigns, Version, AllVersions),
        ec_point_formats = EcPointFormats,
        elliptic_curves = EllipticCurves,
        alpn = encode_alpn(SslOpts#ssl_options.alpn_advertised_protocols, Renegotiation),
@@ -203,14 +204,14 @@ client_certificate_verify(OwnCert, MasterSecret, Version,
     end.
 
 %%--------------------------------------------------------------------
--spec certificate_request(ssl_cipher:cipher_suite(), db_handle(), certdb_ref(), ssl_record:ssl_version()) ->
-    #certificate_request{}.
+-spec certificate_request(ssl_cipher:cipher_suite(), db_handle(), 
+			  certdb_ref(), list(), ssl_record:ssl_version()) ->
+				 #certificate_request{}.
 %%
 %% Description: Creates a certificate_request message, called by the server.
 %%--------------------------------------------------------------------
-certificate_request(CipherSuite, CertDbHandle, CertDbRef, Version) ->
+certificate_request(CipherSuite, CertDbHandle, CertDbRef, HashSigns, Version) ->
     Types = certificate_types(ssl_cipher:suite_definition(CipherSuite), Version),
-    HashSigns = advertised_hash_signs(Version),
     Authorities = certificate_authorities(CertDbHandle, CertDbRef),
     #certificate_request{
 		    certificate_types = Types,
@@ -351,6 +352,9 @@ verify_server_key(#server_key_params{params_bin = EncParams,
 %%
 %% Description: Checks that the certificate_verify message is valid.
 %%--------------------------------------------------------------------
+certificate_verify(_, _, _, undefined, _, _) ->
+    ?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE);
+
 certificate_verify(Signature, PublicKeyInfo, Version,
 		   HashSign = {HashAlgo, _}, MasterSecret, {_, Handshake}) ->
     Hash = calc_certificate_verify(Version, HashAlgo, MasterSecret, Handshake),
@@ -573,43 +577,46 @@ prf({3,_N}, Secret, Label, Seed, WantedLength) ->
 
 
 %%--------------------------------------------------------------------
--spec select_hashsign(#hash_sign_algos{}| undefined,  undefined | binary(), ssl_record:ssl_version()) ->
-			      {atom(), atom()} | undefined.
+-spec select_hashsign(#hash_sign_algos{} | undefined,  undefined | binary(), 
+		      [atom()], ssl_record:ssl_version()) ->
+			     {atom(), atom()} | undefined  | #alert{}.
 
 %%
-%% Description:
+%% Description: Handles signature_algorithms extension
 %%--------------------------------------------------------------------
-select_hashsign(_, undefined, _Version) ->
+select_hashsign(_, undefined, _, _Version) ->
     {null, anon};
 %% The signature_algorithms extension was introduced with TLS 1.2. Ignore it if we have
 %% negotiated a lower version.
-select_hashsign(#hash_sign_algos{hash_sign_algos = HashSigns}, Cert, {Major, Minor} = Version)
+select_hashsign(HashSigns, Cert, undefined, {Major, Minor} = Version)  when Major >= 3 andalso Minor >= 3->
+    select_hashsign(HashSigns, Cert, tls_v1:default_hash_signs(Version), Version);
+select_hashsign(#hash_sign_algos{hash_sign_algos = HashSigns}, Cert, SupportedHashSigns,
+		{Major, Minor} = Version)
   when Major >= 3 andalso Minor >= 3 ->
-    #'OTPCertificate'{tbsCertificate = TBSCert} =public_key:pkix_decode_cert(Cert, otp),
+    #'OTPCertificate'{tbsCertificate = TBSCert} = public_key:pkix_decode_cert(Cert, otp),
     #'OTPSubjectPublicKeyInfo'{algorithm = {_,Algo, _}} = TBSCert#'OTPTBSCertificate'.subjectPublicKeyInfo,
-    DefaultHashSign = {_, Sign} = select_hashsign_algs(undefined, Algo, Version),
-    case lists:filter(fun({sha, dsa}) ->
+    {_, Sign} = select_hashsign_algs(undefined, Algo, Version),
+    case lists:filter(fun({sha, dsa = S}) when S == Sign ->
 			      true;
 			 ({_, dsa}) ->
 			      false;
-			 ({Hash, S}) when  S == Sign ->
-			      ssl_cipher:is_acceptable_hash(Hash,
-							    proplists:get_value(hashs, crypto:supports()));
+			 ({_, S} = Algos) when  S == Sign ->
+			      lists:member(Algos, SupportedHashSigns);
 			 (_)  ->
 			      false
 		      end, HashSigns) of
 	[] ->
-	    DefaultHashSign;
+	    ?ALERT_REC(?FATAL, ?INSUFFICIENT_SECURITY);
 	[HashSign| _] ->
 	    HashSign
     end;
-select_hashsign(_, Cert, Version) ->
+select_hashsign(_, Cert, _, Version) ->
     #'OTPCertificate'{tbsCertificate = TBSCert} = public_key:pkix_decode_cert(Cert, otp),
     #'OTPSubjectPublicKeyInfo'{algorithm = {_,Algo, _}} = TBSCert#'OTPTBSCertificate'.subjectPublicKeyInfo,
     select_hashsign_algs(undefined, Algo, Version).
 
 %%--------------------------------------------------------------------
--spec select_hashsign_algs(#hash_sign_algos{}| undefined, oid(), ssl_record:ssl_version()) ->
+-spec select_hashsign_algs({atom(), atom()}| undefined, oid(), ssl_record:ssl_version()) ->
 				  {atom(), atom()}.
 
 %% Description: For TLS 1.2 hash function and signature algorithm pairs can be
@@ -1063,9 +1070,56 @@ available_suites(UserSuites, Version) ->
 			    lists:member(Suite, ssl_cipher:all_suites(Version))
 		    end, UserSuites).
 
-available_suites(ServerCert, UserSuites, Version, Curve) ->
+available_suites(ServerCert, UserSuites, Version, undefined, Curve) ->
     ssl_cipher:filter(ServerCert, available_suites(UserSuites, Version))
-	-- unavailable_ecc_suites(Curve).
+	-- unavailable_ecc_suites(Curve);
+available_suites(ServerCert, UserSuites, Version, HashSigns, Curve) ->
+    Suites = available_suites(ServerCert, UserSuites, Version, undefined, Curve),
+    filter_hashsigns(Suites, [ssl_cipher:suite_definition(Suite) || Suite <- Suites], HashSigns, []).
+filter_hashsigns([], [], _, Acc) ->
+    lists:reverse(Acc);
+filter_hashsigns([Suite | Suites], [{KeyExchange,_,_,_} | Algos], HashSigns,
+		 Acc) when KeyExchange == dhe_ecdsa;
+			   KeyExchange == ecdhe_ecdsa ->
+    do_filter_hashsigns(ecdsa, Suite, Suites, Algos, HashSigns, Acc);
+
+filter_hashsigns([Suite | Suites], [{KeyExchange,_,_,_} | Algos], HashSigns,
+		 Acc) when KeyExchange == rsa;
+			   KeyExchange == dhe_rsa;
+			   KeyExchange == ecdhe_rsa;
+			   KeyExchange == srp_rsa;
+			   KeyExchange == rsa_psk ->
+    do_filter_hashsigns(rsa, Suite, Suites, Algos, HashSigns, Acc);
+filter_hashsigns([Suite | Suites], [{KeyExchange,_,_,_} | Algos], HashSigns, Acc) when 
+      KeyExchange == dhe_dss;
+      KeyExchange == srp_dss ->							       
+    do_filter_hashsigns(dsa, Suite, Suites, Algos, HashSigns, Acc);
+filter_hashsigns([Suite | Suites], [{KeyExchange,_,_,_} | Algos], HashSigns, Acc) when 
+      KeyExchange == dh_dss; 
+      KeyExchange == dh_rsa; 
+      KeyExchange == dh_ecdsa;
+      KeyExchange == ecdh_rsa;    
+      KeyExchange == ecdh_ecdsa ->
+      %%  Fixed DH certificates MAY be signed with any hash/signature
+      %%  algorithm pair appearing in the hash_sign extension.  The names
+    %%  DH_DSS, DH_RSA, ECDH_ECDSA, and ECDH_RSA are historical.
+    filter_hashsigns(Suites, Algos, HashSigns, [Suite| Acc]);
+filter_hashsigns([Suite | Suites], [{KeyExchange,_,_,_} | Algos], HashSigns, Acc) when 
+      KeyExchange == dh_anon;
+      KeyExchange == ecdh_anon;
+      KeyExchange == srp_anon;
+      KeyExchange == psk;
+      KeyExchange == dhe_psk ->
+    %% In this case hashsigns is not used as the kexchange is anonaymous
+    filter_hashsigns(Suites, Algos, HashSigns, [Suite| Acc]).
+
+do_filter_hashsigns(SignAlgo, Suite, Suites, Algos, HashSigns, Acc) ->
+    case lists:keymember(SignAlgo, 2, HashSigns) of
+	true ->
+	    filter_hashsigns(Suites, Algos, HashSigns, [Suite| Acc]);
+	false ->
+	    filter_hashsigns(Suites, Algos, HashSigns, Acc)
+    end.
 
 unavailable_ecc_suites(no_curve) ->
     ssl_cipher:ec_keyed_suites();
@@ -1077,17 +1131,17 @@ cipher_suites(Suites, false) ->
 cipher_suites(Suites, true) ->
     Suites.
 
-select_session(SuggestedSessionId, CipherSuites, Compressions, Port, #session{ecc = ECCCurve} = 
+select_session(SuggestedSessionId, CipherSuites, HashSigns, Compressions, Port, #session{ecc = ECCCurve} = 
 		   Session, Version,
-	       #ssl_options{ciphers = UserSuites, honor_cipher_order = HCO} = SslOpts,
+	       #ssl_options{ciphers = UserSuites, honor_cipher_order = HonorCipherOrder} = SslOpts,
 	       Cache, CacheCb, Cert) ->
     {SessionId, Resumed} = ssl_session:server_id(Port, SuggestedSessionId,
 						 SslOpts, Cert,
 						 Cache, CacheCb),
     case Resumed of
         undefined ->
-	    Suites = available_suites(Cert, UserSuites, Version, ECCCurve),
-	    CipherSuite = select_cipher_suite(CipherSuites, Suites, HCO),
+	    Suites = available_suites(Cert, UserSuites, Version, HashSigns, ECCCurve),
+	    CipherSuite = select_cipher_suite(CipherSuites, Suites, HonorCipherOrder),
 	    Compression = select_compression(Compressions),
 	    {new, Session#session{session_id = SessionId,
 				  cipher_suite = CipherSuite,
@@ -1155,7 +1209,7 @@ handle_client_hello_extensions(RecordCB, Random, ClientCipherSuites,
 			       #hello_extensions{renegotiation_info = Info,
 						 srp = SRP,
 						 ec_point_formats = ECCFormat,
-                         alpn = ALPN,
+						 alpn = ALPN,
 						 next_protocol_negotiation = NextProtocolNegotiation}, Version,
 			       #ssl_options{secure_renegotiate = SecureRenegotation,
                                             alpn_preferred_protocols = ALPNPreferredProtocols} = Opts,
@@ -2008,27 +2062,16 @@ is_member(Suite, SupportedSuites) ->
 select_compression(_CompressionMetodes) ->
     ?NULL.
 
--define(TLSEXT_SIGALG_RSA(MD), {MD, rsa}).
--define(TLSEXT_SIGALG_DSA(MD), {MD, dsa}).
--define(TLSEXT_SIGALG_ECDSA(MD), {MD, ecdsa}).
-
--define(TLSEXT_SIGALG(MD), ?TLSEXT_SIGALG_ECDSA(MD), ?TLSEXT_SIGALG_RSA(MD)).
-
-advertised_hash_signs({Major, Minor}) when Major >= 3 andalso Minor >= 3 ->
-    HashSigns = [?TLSEXT_SIGALG(sha512),
-		 ?TLSEXT_SIGALG(sha384),
-		 ?TLSEXT_SIGALG(sha256),
-		 ?TLSEXT_SIGALG(sha224),
-		 ?TLSEXT_SIGALG(sha),
-		 ?TLSEXT_SIGALG_DSA(sha),
-		 ?TLSEXT_SIGALG_RSA(md5)],
-    CryptoSupport = crypto:supports(),
-    HasECC = proplists:get_bool(ecdsa,  proplists:get_value(public_keys, CryptoSupport)),
-    Hashs = proplists:get_value(hashs, CryptoSupport),
-    #hash_sign_algos{hash_sign_algos =
-			 lists:filter(fun({Hash, ecdsa}) -> HasECC andalso proplists:get_bool(Hash, Hashs);
-					 ({Hash, _}) -> proplists:get_bool(Hash, Hashs) end, HashSigns)};
-advertised_hash_signs(_) ->
+available_hash_signs(undefined, _, _)  ->
+    undefined;
+available_hash_signs(SupportedHashSigns, {Major, Minor}, AllVersions) when Major >= 3 andalso Minor >= 3 ->
+    case tls_record:lowest_protocol_version(AllVersions) of
+	{3, 3} ->
+	    #hash_sign_algos{hash_sign_algos = SupportedHashSigns};
+	_ ->
+	    undefined
+    end;	
+available_hash_signs(_, _, _) ->
     undefined.
 
 psk_secret(PSKIdentity, PSKLookup) ->

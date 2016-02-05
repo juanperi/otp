@@ -700,6 +700,10 @@ handle_options(Opts0, Role) ->
 		    srp_identity = handle_option(srp_identity, Opts, undefined),
 		    ciphers    = handle_cipher_option(proplists:get_value(ciphers, Opts, []), 
 						      RecordCb:highest_protocol_version(Versions)),
+		    hash_signs = handle_hashsigns_option(proplists:get_value(hash_signs, Opts, 
+									     default_option_role(server, 
+												 tls_v1:default_hash_signs(Versions), Role)),
+							 RecordCb:highest_protocol_version(Versions)), 
 		    %% Server side option
 		    reuse_session = handle_option(reuse_session, Opts, ReuseSessionFun),
 		    reuse_sessions = handle_option(reuse_sessions, Opts, true),
@@ -749,7 +753,7 @@ handle_options(Opts0, Role) ->
 		  alpn_preferred_protocols, next_protocols_advertised,
 		  client_preferred_next_protocols, log_alert,
 		  server_name_indication, honor_cipher_order, padding_check, crl_check, crl_cache,
-		  fallback],
+		  fallback, hash_signs],
 
     SockOpts = lists:foldl(fun(Key, PropList) ->
 				   proplists:delete(Key, PropList)
@@ -989,6 +993,19 @@ validate_option(crl_cache, {Cb, {_Handle, Options}} = Value) when is_atom(Cb) an
 validate_option(Opt, Value) ->
     throw({error, {options, {Opt, Value}}}).
 
+handle_hashsigns_option(Value, {Major, Minor} = Version) when is_list(Value) 
+							      andalso Major >= 3 andalso Minor >= 3->
+    case tls_v1:hash_signs(Version, Value) of
+	[] ->
+	    throw({error, {options, no_supported_algorithms, {hash_signs, Value}}});
+	_ ->	
+	    Value
+    end;
+handle_hashsigns_option(Value, {Major, Minor} = Version) when is_list(Value) 
+							      andalso Major >= 3 andalso Minor >= 3->
+    handle_hashsigns_option(tls_v1:default_hash_signs(Version), Version);
+handle_hashsigns_option(_, _Version) ->
+    undefined.
 
 validate_options([]) ->
 	[];
@@ -1285,6 +1302,13 @@ new_ssl_options([{server_name_indication, Value} | Rest], #ssl_options{} = Opts,
     new_ssl_options(Rest, Opts#ssl_options{server_name_indication = validate_option(server_name_indication, Value)}, RecordCB);
 new_ssl_options([{honor_cipher_order, Value} | Rest], #ssl_options{} = Opts, RecordCB) -> 
     new_ssl_options(Rest, Opts#ssl_options{honor_cipher_order = validate_option(honor_cipher_order, Value)}, RecordCB);
+new_ssl_options([{hash_signs, Value} | Rest], #ssl_options{} = Opts, RecordCB) -> 
+    new_ssl_options(Rest, 
+		    Opts#ssl_options{hash_signs = 
+					 handle_hashsigns_option(Value, 
+								 RecordCB:highest_protocol_version())}, 
+		    RecordCB);
+
 new_ssl_options([{Key, Value} | _Rest], #ssl_options{}, _) -> 
     throw({error, {options, {Key, Value}}}).
 

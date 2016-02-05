@@ -304,13 +304,9 @@ hello(#hello_request{}, #state{role = client} = State0, Connection) ->
     {Record, State} = Connection:next_record(State0),
     Connection:next_state(hello, hello, Record, State);
 
-hello({common_client_hello, Type, ServerHelloExt, NegotiatedHashSign},
+hello({common_client_hello, Type, ServerHelloExt},
       State, Connection) ->
-    do_server_hello(Type, ServerHelloExt,
-		    %% Note NegotiatedHashSign is only negotiated for real if
-		    %% if TLS version is at least TLS-1.2 
-		    State#state{hashsign_algorithm = NegotiatedHashSign}, Connection);
-
+    do_server_hello(Type, ServerHelloExt, State, Connection);
 hello(timeout, State, _) ->
     {next_state, hello, State, hibernate};
 
@@ -442,6 +438,7 @@ certify(#server_key_exchange{exchange_keys = Keys},
        Alg == srp_dss; Alg == srp_rsa; Alg == srp_anon ->
 
     Params = ssl_handshake:decode_server_key(Keys, Alg, Version),
+    %% Use negotiated value if TLS-1.2 otherwhise return default
     HashSign = negotiated_hashsign(Params#server_key_params.hashsign, Alg, Version),
     case is_anonymous(Alg) of
 	true ->
@@ -464,11 +461,13 @@ certify(#server_key_exchange{} = Msg,
 
 certify(#certificate_request{hashsign_algorithms = HashSigns},
 	#state{session = #session{own_certificate = Cert},
-        negotiated_version = Version} = State0, Connection) ->
-    HashSign = ssl_handshake:select_hashsign(HashSigns, Cert, Version),
+	       ssl_options = #ssl_options{hash_signs = SupportedHashSigns},
+	       negotiated_version = Version} = State0, Connection) ->
+    %% FOO
+    NegotiatedHashSign = ssl_handshake:select_hashsign(HashSigns, Cert, SupportedHashSigns, Version),
     {Record, State} = Connection:next_record(State0#state{client_certificate_requested = true}),
     Connection:next_state(certify, certify, Record,
-			  State#state{cert_hashsign_algorithm = HashSign});
+			  State#state{cert_hashsign_algorithm = NegotiatedHashSign});
 
 %% PSK and RSA_PSK might bypass the Server-Key-Exchange
 certify(#server_hello_done{},
@@ -576,13 +575,15 @@ cipher(#hello_request{}, State0, Connection) ->
 
 cipher(#certificate_verify{signature = Signature, hashsign_algorithm = CertHashSign},
        #state{role = server,
-	      public_key_info = {Algo, _, _} =PublicKeyInfo,
+	      key_algorithm = KeyAlg,
+	      public_key_info = PublicKeyInfo,
 	      negotiated_version = Version,
 	      session = #session{master_secret = MasterSecret},
 	      tls_handshake_history = Handshake
 	     } = State0, Connection) ->
-
-    HashSign = ssl_handshake:select_hashsign_algs(CertHashSign, Algo, Version),
+    
+    %% Use negotiated value if TLS-1.2 otherwhise return default
+    HashSign = negotiated_hashsign(CertHashSign, KeyAlg, Version),
     case ssl_handshake:certificate_verify(Signature, PublicKeyInfo,
 					  Version, HashSign, MasterSecret, Handshake) of
 	valid ->
@@ -1448,7 +1449,8 @@ rsa_psk_key_exchange(Version, PskIdentity, PremasterSecret, PublicKeyInfo = {Alg
 rsa_psk_key_exchange(_, _, _, _) ->
     throw (?ALERT_REC(?FATAL,?HANDSHAKE_FAILURE)).
 
-request_client_cert(#state{ssl_options = #ssl_options{verify = verify_peer},
+request_client_cert(#state{ssl_options = #ssl_options{verify = verify_peer, 
+						      hash_signs = SupportedHashSigns},
 			   connection_states = ConnectionStates0,
 			   cert_db = CertDbHandle,
 			   cert_db_ref = CertDbRef,
@@ -1456,7 +1458,9 @@ request_client_cert(#state{ssl_options = #ssl_options{verify = verify_peer},
     #connection_state{security_parameters =
 			  #security_parameters{cipher_suite = CipherSuite}} =
 	ssl_record:pending_connection_state(ConnectionStates0, read),
-    Msg = ssl_handshake:certificate_request(CipherSuite, CertDbHandle, CertDbRef, Version),
+    HashSigns = ssl_handshake:available_hash_signs(SupportedHashSigns, Version, [Version]),
+    Msg = ssl_handshake:certificate_request(CipherSuite, CertDbHandle, CertDbRef, 
+					    HashSigns, Version),
     State = Connection:send_handshake(Msg, State0),
     State#state{client_certificate_requested = true};
 
