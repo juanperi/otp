@@ -191,7 +191,7 @@ hello(Hello = #client_hello{client_version = ClientVersion,
 		     session_cache = Cache,
 		     session_cache_cb = CacheCb,
 		     negotiated_protocol = CurrentProtocol,
-		     ssl_options = SslOpts}) ->
+		     ssl_options = #ssl_options{hash_blacklist = HashBlacklist} = SslOpts}) ->
     case tls_handshake:hello(Hello, SslOpts, {Port, Session0, Cache, CacheCb,
 					      ConnectionStates0, Cert}, Renegotiation) of
         #alert{} = Alert ->
@@ -204,7 +204,7 @@ hello(Hello = #client_hello{client_version = ClientVersion,
 		_ -> Protocol0
 	    end,
 
-            HashSign = ssl_handshake:select_hashsign(HashSigns, Cert, Version),
+            HashSign = ssl_handshake:select_hashsign(HashSigns, Cert, HashBlacklist, Version),
             ssl_connection:hello({common_client_hello, Type, ServerHelloExt, HashSign},
 				 State#state{connection_states  = ConnectionStates,
 					     negotiated_version = Version,

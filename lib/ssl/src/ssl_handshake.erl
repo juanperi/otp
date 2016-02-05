@@ -46,7 +46,7 @@
 
 %% Handshake messages
 -export([hello_request/0, server_hello/4, server_hello_done/0,
-	 certificate/4, certificate_request/4, key_exchange/3,
+	 certificate/4, certificate_request/5, key_exchange/3,
 	 finished/5,  next_protocol/1]).
 
 %% Handle handshake messages
@@ -74,7 +74,7 @@
 	]).
 
 %% MISC
--export([select_version/3, prf/5, select_hashsign/3, 
+-export([select_version/3, prf/5, select_hashsign/4, 
 	 select_hashsign_algs/2, select_hashsign_algs/3,
 	 premaster_secret/2, premaster_secret/3, premaster_secret/4]).
 
@@ -120,7 +120,8 @@ server_hello(SessionId, Version, ConnectionStates, Extensions) ->
 server_hello_done() ->
     #server_hello_done{}.
 
-client_hello_extensions(Host, Version, CipherSuites, SslOpts, ConnectionStates, Renegotiation) ->
+client_hello_extensions(Host, Version, CipherSuites, 
+			#ssl_options{hash_blacklist = HashBlacklist} =SslOpts, ConnectionStates, Renegotiation) ->
     {EcPointFormats, EllipticCurves} =
 	case advertises_ec_ciphers(lists:map(fun ssl_cipher:suite_definition/1, CipherSuites)) of
 	    true ->
@@ -134,7 +135,7 @@ client_hello_extensions(Host, Version, CipherSuites, SslOpts, ConnectionStates, 
        renegotiation_info = renegotiation_info(tls_record, client,
 					       ConnectionStates, Renegotiation),
        srp = SRP,
-       hash_signs = advertised_hash_signs(Version),
+       hash_signs = available_hash_signs(HashBlacklist, Version),
        ec_point_formats = EcPointFormats,
        elliptic_curves = EllipticCurves,
        alpn = encode_alpn(SslOpts#ssl_options.alpn_advertised_protocols, Renegotiation),
@@ -203,14 +204,15 @@ client_certificate_verify(OwnCert, MasterSecret, Version,
     end.
 
 %%--------------------------------------------------------------------
--spec certificate_request(ssl_cipher:cipher_suite(), db_handle(), certdb_ref(), ssl_record:ssl_version()) ->
-    #certificate_request{}.
+-spec certificate_request(ssl_cipher:cipher_suite(), db_handle(), 
+			  certdb_ref(), [atom()], ssl_record:ssl_version()) ->
+				 #certificate_request{}.
 %%
 %% Description: Creates a certificate_request message, called by the server.
 %%--------------------------------------------------------------------
-certificate_request(CipherSuite, CertDbHandle, CertDbRef, Version) ->
+certificate_request(CipherSuite, CertDbHandle, CertDbRef, HashBlacklist, Version) ->
     Types = certificate_types(ssl_cipher:suite_definition(CipherSuite), Version),
-    HashSigns = advertised_hash_signs(Version),
+    HashSigns = available_hash_signs(HashBlacklist, Version),
     Authorities = certificate_authorities(CertDbHandle, CertDbRef),
     #certificate_request{
 		    certificate_types = Types,
@@ -351,6 +353,9 @@ verify_server_key(#server_key_params{params_bin = EncParams,
 %%
 %% Description: Checks that the certificate_verify message is valid.
 %%--------------------------------------------------------------------
+certificate_verify(_, _, _, undefined, _, _) ->
+    ?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE);
+
 certificate_verify(Signature, PublicKeyInfo, Version,
 		   HashSign = {HashAlgo, _}, MasterSecret, {_, Handshake}) ->
     Hash = calc_certificate_verify(Version, HashAlgo, MasterSecret, Handshake),
@@ -573,17 +578,19 @@ prf({3,_N}, Secret, Label, Seed, WantedLength) ->
 
 
 %%--------------------------------------------------------------------
--spec select_hashsign(#hash_sign_algos{}| undefined,  undefined | binary(), ssl_record:ssl_version()) ->
-			      {atom(), atom()} | undefined.
+-spec select_hashsign(#hash_sign_algos{} | undefined,  undefined | binary(), 
+		      [atom()], ssl_record:ssl_version()) ->
+			     {atom(), atom()} | undefined.
 
 %%
-%% Description:
+%% Description: Handles signature_algorithms extension
 %%--------------------------------------------------------------------
-select_hashsign(_, undefined, _Version) ->
+select_hashsign(_, undefined, _, _Version) ->
     {null, anon};
 %% The signature_algorithms extension was introduced with TLS 1.2. Ignore it if we have
 %% negotiated a lower version.
-select_hashsign(#hash_sign_algos{hash_sign_algos = HashSigns}, Cert, {Major, Minor} = Version)
+select_hashsign(#hash_sign_algos{hash_sign_algos = HashSigns}, Cert, HashBlackList,
+		{Major, Minor} = Version)
   when Major >= 3 andalso Minor >= 3 ->
     #'OTPCertificate'{tbsCertificate = TBSCert} =public_key:pkix_decode_cert(Cert, otp),
     #'OTPSubjectPublicKeyInfo'{algorithm = {_,Algo, _}} = TBSCert#'OTPTBSCertificate'.subjectPublicKeyInfo,
@@ -593,8 +600,8 @@ select_hashsign(#hash_sign_algos{hash_sign_algos = HashSigns}, Cert, {Major, Min
 			 ({_, dsa}) ->
 			      false;
 			 ({Hash, S}) when  S == Sign ->
-			      ssl_cipher:is_acceptable_hash(Hash,
-							    proplists:get_value(hashs, crypto:supports()));
+			      ValidHashes = tls_v1:hash_signs(Version, HashBlackList),
+			      ssl_cipher:is_acceptable_hash(Hash, ValidHashes);
 			 (_)  ->
 			      false
 		      end, HashSigns) of
@@ -603,13 +610,13 @@ select_hashsign(#hash_sign_algos{hash_sign_algos = HashSigns}, Cert, {Major, Min
 	[HashSign| _] ->
 	    HashSign
     end;
-select_hashsign(_, Cert, Version) ->
+select_hashsign(_, Cert, _, Version) ->
     #'OTPCertificate'{tbsCertificate = TBSCert} = public_key:pkix_decode_cert(Cert, otp),
     #'OTPSubjectPublicKeyInfo'{algorithm = {_,Algo, _}} = TBSCert#'OTPTBSCertificate'.subjectPublicKeyInfo,
     select_hashsign_algs(undefined, Algo, Version).
 
 %%--------------------------------------------------------------------
--spec select_hashsign_algs(#hash_sign_algos{}| undefined, oid(), ssl_record:ssl_version()) ->
+-spec select_hashsign_algs({atom(), atom()}| undefined, oid(), ssl_record:ssl_version()) ->
 				  {atom(), atom()}.
 
 %% Description: For TLS 1.2 hash function and signature algorithm pairs can be
@@ -2008,27 +2015,17 @@ is_member(Suite, SupportedSuites) ->
 select_compression(_CompressionMetodes) ->
     ?NULL.
 
--define(TLSEXT_SIGALG_RSA(MD), {MD, rsa}).
--define(TLSEXT_SIGALG_DSA(MD), {MD, dsa}).
--define(TLSEXT_SIGALG_ECDSA(MD), {MD, ecdsa}).
-
--define(TLSEXT_SIGALG(MD), ?TLSEXT_SIGALG_ECDSA(MD), ?TLSEXT_SIGALG_RSA(MD)).
-
-advertised_hash_signs({Major, Minor}) when Major >= 3 andalso Minor >= 3 ->
-    HashSigns = [?TLSEXT_SIGALG(sha512),
-		 ?TLSEXT_SIGALG(sha384),
-		 ?TLSEXT_SIGALG(sha256),
-		 ?TLSEXT_SIGALG(sha224),
-		 ?TLSEXT_SIGALG(sha),
-		 ?TLSEXT_SIGALG_DSA(sha),
-		 ?TLSEXT_SIGALG_RSA(md5)],
+available_hash_signs(HashBlacklist, {Major, Minor} = Version) when Major >= 3 andalso Minor >= 3 ->
+    HashSigns = tls_v1:hash_signs(Version, HashBlacklist),
     CryptoSupport = crypto:supports(),
     HasECC = proplists:get_bool(ecdsa,  proplists:get_value(public_keys, CryptoSupport)),
-    Hashs = proplists:get_value(hashs, CryptoSupport),
     #hash_sign_algos{hash_sign_algos =
-			 lists:filter(fun({Hash, ecdsa}) -> HasECC andalso proplists:get_bool(Hash, Hashs);
-					 ({Hash, _}) -> proplists:get_bool(Hash, Hashs) end, HashSigns)};
-advertised_hash_signs(_) ->
+			 lists:filter(fun({_, ecdsa}) -> 
+					      HasECC;
+					 ({_, _}) -> 
+					      true 
+				      end, HashSigns)};
+available_hash_signs(_, _) ->
     undefined.
 
 psk_secret(PSKIdentity, PSKLookup) ->

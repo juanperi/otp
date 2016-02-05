@@ -464,8 +464,9 @@ certify(#server_key_exchange{} = Msg,
 
 certify(#certificate_request{hashsign_algorithms = HashSigns},
 	#state{session = #session{own_certificate = Cert},
-        negotiated_version = Version} = State0, Connection) ->
-    HashSign = ssl_handshake:select_hashsign(HashSigns, Cert, Version),
+	       ssl_options = #ssl_options{hash_blacklist = HashBlackList},
+	       negotiated_version = Version} = State0, Connection) ->
+    HashSign = ssl_handshake:select_hashsign(HashSigns, Cert, HashBlackList, Version),
     {Record, State} = Connection:next_record(State0#state{client_certificate_requested = true}),
     Connection:next_state(certify, certify, Record,
 			  State#state{cert_hashsign_algorithm = HashSign});
@@ -581,7 +582,8 @@ cipher(#certificate_verify{signature = Signature, hashsign_algorithm = CertHashS
 	      session = #session{master_secret = MasterSecret},
 	      tls_handshake_history = Handshake
 	     } = State0, Connection) ->
-
+    
+    %% Use negotiated value if TLS-1.2 otherwhise return default
     HashSign = ssl_handshake:select_hashsign_algs(CertHashSign, Algo, Version),
     case ssl_handshake:certificate_verify(Signature, PublicKeyInfo,
 					  Version, HashSign, MasterSecret, Handshake) of

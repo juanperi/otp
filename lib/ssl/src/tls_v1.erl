@@ -31,7 +31,8 @@
 
 -export([master_secret/4, finished/5, certificate_verify/3, mac_hash/7,
 	 setup_keys/8, suites/1, prf/5,
-	 ecc_curves/1, oid_to_enum/1, enum_to_oid/1]).
+	 ecc_curves/1, oid_to_enum/1, enum_to_oid/1, 
+	 hash_signs/2]).
 
 %%====================================================================
 %% Internal application API
@@ -257,6 +258,37 @@ suites(3) ->
      %% ?TLS_DH_DSS_WITH_AES_128_GCM_SHA256
     ] ++ suites(2).
 
+-define(TLSEXT_SIGALG_RSA(MD), {MD, rsa}).
+-define(TLSEXT_SIGALG_DSA(MD), {MD, dsa}).
+-define(TLSEXT_SIGALG_ECDSA(MD), {MD, ecdsa}).
+-define(TLSEXT_SIGALG(MD), ?TLSEXT_SIGALG_ECDSA(MD), ?TLSEXT_SIGALG_RSA(MD)).
+
+hash_signs({3, 3}, BlackList) ->
+    Hashes = proplists:get_value(hashs, crypto:supports()),
+    %% Note will revers input list so that most bits 
+    %% will be first in resulting list.
+    SHA2s = lists:foldl(fun(SHA2, Acc) -> 
+				case proplists:get_bool(SHA2, Hashes) of
+				    true ->
+					[?TLSEXT_SIGALG(SHA2) | Acc];
+				    false ->
+					[]
+				end
+			end, [], [sha224,sha256,sha384,sha512]), 
+    SHA1 = case (not proplists:get_bool(sha, BlackList)) andalso proplists:get_bool(sha, Hashes) of
+	       true ->
+		   [?TLSEXT_SIGALG(sha),
+		    ?TLSEXT_SIGALG_DSA(sha)];
+	       false ->
+		   []
+	   end,
+    MD5 = case (not proplists:get_bool(md5, BlackList)) andalso proplists:get_bool(md5, Hashes) of
+	      true ->
+		  [?TLSEXT_SIGALG_RSA(md5)];
+	      false ->
+		  []
+	  end,
+    SHA2s ++ SHA1 ++ MD5.
 
 %%--------------------------------------------------------------------
 %%% Internal functions
