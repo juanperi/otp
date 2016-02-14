@@ -981,7 +981,7 @@ validate_option(Opt, Value) ->
 
 handle_blacklist_option(Value, {Major, Minor} = Version) when is_list(Value) 
 							      andalso Major >= 3 andalso Minor >= 3->
-    case tls_v1:default_hash_signs(Version, Value) of
+    case tls_v1:hash_signs(Version, Value) of
 	[] ->
 	    throw({error, {options, can_not_blacklist_all_available_hashes, {hash_blacklist, Value}}});
 	_ ->	

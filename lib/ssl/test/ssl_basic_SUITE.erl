@@ -58,7 +58,7 @@ all() ->
 groups() ->
     [{basic, [], basic_tests()},
      {options, [], options_tests()},
-     {'tlsv1.2', [], all_versions_groups()},
+     {'tlsv1.2', [], all_versions_groups() ++ [blacklist_hash]},
      {'tlsv1.1', [], all_versions_groups()},
      {'tlsv1', [], all_versions_groups() ++ rizzo_tests()},
      {'sslv3', [], all_versions_groups() ++ rizzo_tests() ++ [ciphersuite_vs_version]},
@@ -2844,7 +2844,44 @@ ciphersuite_vs_version(Config) when is_list(Config) ->
 	_ ->
 	    ct:fail({unexpected_server_hello, ServerHello})
     end.
-										
+		
+
+%%--------------------------------------------------------------------
+blacklist_hash()  ->
+    [{doc,"Test a TLSv-1.2 blacklist_hash option"}].
+blacklist_hash(Config) when is_list(Config) ->
+    
+    ClientOpts = ?config(client_opts, Config),
+    ServerOpts = ?config(server_opts, Config),
+
+    {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
+
+    %[Hash1, Hash2, Hash3 | _ ] = tls_v1:hash_signs({3, 3}, []), 
+
+    Server = ssl_test_lib:start_server([{node, ServerNode}, {port, 0},
+					{from, self()},
+					{mfa, {?MODULE, connection_info_result, []}},
+					{options, [{hash_blacklist, [sha384]}
+						   | ServerOpts]}]),
+    Port = ssl_test_lib:inet_port(Server),
+    Client = ssl_test_lib:start_client([{node, ClientNode}, {port, Port},
+					{host, Hostname},
+					{from, self()}, 
+					{mfa, {?MODULE, connection_info_result, []}},
+					{options, [{ciphers, [{ecdhe_rsa,aes_256_cbc,sha384}, 
+							      {ecdhe_rsa,aes_256_cbc,sha}]}
+						    | ClientOpts]}]),
+    
+    Version =
+	tls_record:protocol_version(tls_record:highest_protocol_version([])),
+
+    ServerMsg = ClientMsg = {ok, {Version, {ecdhe_rsa,aes_256_cbc,sha}}},
+
+    ssl_test_lib:check_result(Server, ServerMsg, Client, ClientMsg),
+    
+    ssl_test_lib:close(Server),
+    ssl_test_lib:close(Client).
+    							
 %%--------------------------------------------------------------------
 
 dont_crash_on_handshake_garbage() ->

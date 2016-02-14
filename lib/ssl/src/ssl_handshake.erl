@@ -595,7 +595,7 @@ select_hashsign(#hash_sign_algos{hash_sign_algos = HashSigns}, Cert, HashBlackLi
     #'OTPCertificate'{tbsCertificate = TBSCert} =public_key:pkix_decode_cert(Cert, otp),
     #'OTPSubjectPublicKeyInfo'{algorithm = {_,Algo, _}} = TBSCert#'OTPTBSCertificate'.subjectPublicKeyInfo,
     DefaultHashSign = {_, Sign} = select_hashsign_algs(undefined, Algo, Version),
-    case lists:filter(fun({sha, dsa}) ->
+    case lists:filter(fun({sha, dsa = S}) when S == Sign ->
 			      true;
 			 ({_, dsa}) ->
 			      false;

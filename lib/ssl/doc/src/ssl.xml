@@ -156,7 +156,7 @@
       | aes_128_cbc | aes_256_cbc | aes_128_gcm | aes_256_gcm</c></p></item>
 
       <tag><c>hash() =</c></tag>
-      <item><p><c>md5 | sha</c></p></item>
+      <item><p><c>md5 | sha| sha224 | sha256 | sha384  | sha512 </c></p></item>
 
       <tag><c>prf_random() =</c></tag>
       <item><p><c>client_random | server_random</c></p></item>
@@ -413,6 +413,11 @@ fun(srp, Username :: string(), UserState :: term()) ->
 
         <warning><p>Using <c>{padding_check, boolean()}</c> makes TLS
 	vulnerable to the Poodle attack.</p></warning>
+
+	<tag><c>{hash_blacklist, [hash()]}</c></tag>
+	<item><p>Affects TLS-1.2 connections only.
+	Removes blacklisted hash functions from the list of supported hash functions
+	that may be negotiated.</p> </item>
 
   </section>
   

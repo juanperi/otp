@@ -1443,7 +1443,8 @@ rsa_psk_key_exchange(Version, PskIdentity, PremasterSecret, PublicKeyInfo = {Alg
 rsa_psk_key_exchange(_, _, _, _) ->
     throw (?ALERT_REC(?FATAL,?HANDSHAKE_FAILURE)).
 
-request_client_cert(#state{ssl_options = #ssl_options{verify = verify_peer},
+request_client_cert(#state{ssl_options = #ssl_options{verify = verify_peer,
+						      hash_blacklist = HashBlackList},
 			   connection_states = ConnectionStates0,
 			   cert_db = CertDbHandle,
 			   cert_db_ref = CertDbRef,
@@ -1451,7 +1452,8 @@ request_client_cert(#state{ssl_options = #ssl_options{verify = verify_peer},
     #connection_state{security_parameters =
 			  #security_parameters{cipher_suite = CipherSuite}} =
 	ssl_record:pending_connection_state(ConnectionStates0, read),
-    Msg = ssl_handshake:certificate_request(CipherSuite, CertDbHandle, CertDbRef, Version),
+    Msg = ssl_handshake:certificate_request(CipherSuite, CertDbHandle, CertDbRef, 
+					    HashBlackList, Version),
     State = Connection:send_handshake(Msg, State0),
     State#state{client_certificate_requested = true};
 
