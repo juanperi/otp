@@ -144,7 +144,7 @@
       <p>According to old API.</p></item>
 
       <tag><c>ciphersuite() =</c></tag>
-      <item><p><c>{key_exchange(), cipher(), hash()}</c></p></item>
+      <item><p><c>{key_exchange(), cipher(), hash()} | {key_exchange(), cipher(), hash() | PRF::hash()}</c></p></item>
 
       <tag><c>key_exchange()=</c></tag>
       <item><p><c>rsa | dhe_dss | dhe_rsa | dh_anon | psk | dhe_psk
