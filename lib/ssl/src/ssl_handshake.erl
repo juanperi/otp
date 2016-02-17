@@ -1070,9 +1070,10 @@ available_suites(UserSuites, Version) ->
 			    lists:member(Suite, ssl_cipher:all_suites(Version))
 		    end, UserSuites).
 
-available_suites(ServerCert, UserSuites, Version, Curve) ->
-    ssl_cipher:filter(ServerCert, available_suites(UserSuites, Version))
-	-- unavailable_ecc_suites(Curve).
+available_suites(ServerCert, UserSuites, Version, HashSigns, Curve) ->
+    Suites = ssl_cipher:filter(ServerCert, available_suites(UserSuites, Version))
+	-- unavailable_ecc_suites(Curve),
+    [Suite || Suite <- Suites, ]
 
 unavailable_ecc_suites(no_curve) ->
     ssl_cipher:ec_keyed_suites();
@@ -1084,7 +1085,7 @@ cipher_suites(Suites, false) ->
 cipher_suites(Suites, true) ->
     Suites.
 
-select_session(SuggestedSessionId, CipherSuites, Compressions, Port, #session{ecc = ECCCurve} = 
+select_session(SuggestedSessionId, CipherSuites, HashSigns, Compressions, Port, #session{ecc = ECCCurve} = 
 		   Session, Version,
 	       #ssl_options{ciphers = UserSuites, honor_cipher_order = HCO} = SslOpts,
 	       Cache, CacheCb, Cert) ->
@@ -1093,7 +1094,7 @@ select_session(SuggestedSessionId, CipherSuites, Compressions, Port, #session{ec
 						 Cache, CacheCb),
     case Resumed of
         undefined ->
-	    Suites = available_suites(Cert, UserSuites, Version, ECCCurve),
+	    Suites = available_suites(Cert, UserSuites, Version, HashSigns, ECCCurve),
 	    CipherSuite = select_cipher_suite(CipherSuites, Suites, HCO),
 	    Compression = select_compression(Compressions),
 	    {new, Session#session{session_id = SessionId,
@@ -1162,7 +1163,7 @@ handle_client_hello_extensions(RecordCB, Random, ClientCipherSuites,
 			       #hello_extensions{renegotiation_info = Info,
 						 srp = SRP,
 						 ec_point_formats = ECCFormat,
-                         alpn = ALPN,
+						 alpn = ALPN,
 						 next_protocol_negotiation = NextProtocolNegotiation}, Version,
 			       #ssl_options{secure_renegotiate = SecureRenegotation,
                                             alpn_preferred_protocols = ALPNPreferredProtocols} = Opts,

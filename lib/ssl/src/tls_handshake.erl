@@ -152,14 +152,15 @@ handle_client_hello(Version, #client_hello{session_id = SugesstedId,
 				       cipher_suites = CipherSuites,
 				       compression_methods = Compressions,
 				       random = Random,
-				       extensions = #hello_extensions{elliptic_curves = Curves} = HelloExt},
+				       extensions = #hello_extensions{elliptic_curves = Curves,
+								      hash_signs = HashSigns} = HelloExt},
 		#ssl_options{versions = Versions} = SslOpts,
 	 {Port, Session0, Cache, CacheCb, ConnectionStates0, Cert}, Renegotiation) ->
     case tls_record:is_acceptable_version(Version, Versions) of
 	true ->
 	    ECCCurve = ssl_handshake:select_curve(Curves, ssl_handshake:supported_ecc(Version)),
 	    {Type, #session{cipher_suite = CipherSuite} = Session1}
-		= ssl_handshake:select_session(SugesstedId, CipherSuites, Compressions,
+		= ssl_handshake:select_session(SugesstedId, CipherSuites, HashSigns, Compressions,
 					       Port, Session0#session{ecc = ECCCurve}, Version,
 					       SslOpts, Cache, CacheCb, Cert),
 	    case CipherSuite of 
