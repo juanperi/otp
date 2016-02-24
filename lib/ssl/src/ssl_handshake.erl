@@ -1073,8 +1073,37 @@ available_suites(UserSuites, Version) ->
 available_suites(ServerCert, UserSuites, Version, HashSigns, Curve) ->
     Suites = ssl_cipher:filter(ServerCert, available_suites(UserSuites, Version))
 	-- unavailable_ecc_suites(Curve),
-    [Suite || Suite <- Suites, ]
+    filter_hashsigns(Suites, [ssl_cipher:suite_definition(Suite) || Suite <- Suites], HasSigns, []).
 
+filter_hashsigns([], [], _, Acc) ->
+    lists:reverse(Acc);
+filter_hashsigns([Suite | Suites], [{KeyAlgo,_,_,_} | Algos], HashSigns , Acc) when KeyAlgo == ecdhe_ecdsa;
+										    KeyAlgo == ecdh_ecdsa ->
+    
+    do_filter_hashsigns(ecdsa, Suite, Suites, Algos, HashSign, Acc);
+
+filter_hashsigns([Suite | Suites], [KeyExAlgo | Algos], HashSigns , Acc) when KeyAlgo == ecdhe_rsa;
+									      KeyAlgo == ecdh_rsa;
+									      KeyAlgo == dhe_rsa;
+									      KeyAlgo == rsa ->
+    do_filter_hashsigns(rsa, Suite, Suites, Algos, HashSign, Acc);
+
+filter_hashsigns([Suite | Suites], [KeyExAlgo | Algos], HashSigns , Acc) when KeyAlgo == dhe_dss ->								       
+    do_filter_hashsigns(dsa, Suite, Suites, Algos, HashSign, Acc);
+
+do_filter_hashsigns(SignAlgo, Suite, Suites, Algos, HashSign, Acc) ->
+    case lists:keymember(SignAlgo, 2, HashSigns) of
+	true ->
+	    filter_hashsigns(Suites, Algos, HasSigns, [Suite| Acc]);
+	false ->
+	    filter_hashsigns(Suites, Algos, HasSigns, Acc);
+	end.
+
+key_exchange_algo({KeyExchangAlgo, _,_}) ->
+    KeyExchangAlgo;
+key_exchange_algo({KeyExchangAlgo, _,_,_}) ->
+    KeyExchangAlgo.
+	
 unavailable_ecc_suites(no_curve) ->
     ssl_cipher:ec_keyed_suites();
 unavailable_ecc_suites(_) ->
