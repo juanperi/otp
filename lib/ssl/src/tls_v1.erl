@@ -32,7 +32,7 @@
 -export([master_secret/4, finished/5, certificate_verify/3, mac_hash/7,
 	 setup_keys/8, suites/1, prf/5,
 	 ecc_curves/1, oid_to_enum/1, enum_to_oid/1, 
-	 hash_signs/2]).
+	 hash_signs/2, hashes/1]).
 
 %%====================================================================
 %% Internal application API
@@ -289,6 +289,10 @@ hash_signs({3, 3}, BlackList) ->
 		  []
 	  end,
     SHA2s ++ SHA1 ++ MD5.
+
+hashes({3, 3}) ->
+    Hashes = proplists:get_value(hashs, crypto:supports()),
+    [Hash || Hash <- [sha512, sh394, sha256,sha244, sha, md5], lists:member(Hash, Hashes)].
 
 %%--------------------------------------------------------------------
 %%% Internal functions

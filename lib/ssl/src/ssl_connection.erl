@@ -466,10 +466,14 @@ certify(#certificate_request{hashsign_algorithms = HashSigns},
 	#state{session = #session{own_certificate = Cert},
 	       ssl_options = #ssl_options{hash_blacklist = HashBlackList},
 	       negotiated_version = Version} = State0, Connection) ->
-    HashSign = ssl_handshake:select_hashsign(HashSigns, Cert, HashBlackList, Version),
-    {Record, State} = Connection:next_record(State0#state{client_certificate_requested = true}),
-    Connection:next_state(certify, certify, Record,
-			  State#state{cert_hashsign_algorithm = HashSign});
+    case ssl_handshake:select_hashsign(HashSigns, Cert, HashBlackList, Version) of
+	#alert{} = Alert ->
+	    Connection:handle_own_alert(Alert, Version, certify, State0);
+	HashSign ->
+	    {Record, State} = Connection:next_record(State0#state{client_certificate_requested = true}),
+	    Connection:next_state(certify, certify, Record,
+				  State#state{cert_hashsign_algorithm = HashSign})
+    end;
 
 %% PSK and RSA_PSK might bypass the Server-Key-Exchange
 certify(#server_hello_done{},
@@ -584,7 +588,7 @@ cipher(#certificate_verify{signature = Signature, hashsign_algorithm = CertHashS
 	     } = State0, Connection) ->
     
     %% Use negotiated value if TLS-1.2 otherwhise return default
-    HashSign = ssl_handshake:select_hashsign_algs(CertHashSign, Algo, Version),
+    HashSign = negotiated_hashsign(CertHashSign, Algo, Version),
     case ssl_handshake:certificate_verify(Signature, PublicKeyInfo,
 					  Version, HashSign, MasterSecret, Handshake) of
 	valid ->

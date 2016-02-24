@@ -580,7 +580,7 @@ prf({3,_N}, Secret, Label, Seed, WantedLength) ->
 %%--------------------------------------------------------------------
 -spec select_hashsign(#hash_sign_algos{} | undefined,  undefined | binary(), 
 		      [atom()], ssl_record:ssl_version()) ->
-			     {atom(), atom()} | undefined.
+			     {atom(), atom()} | undefined  | #alert{}.
 
 %%
 %% Description: Handles signature_algorithms extension
@@ -592,21 +592,20 @@ select_hashsign(_, undefined, _, _Version) ->
 select_hashsign(#hash_sign_algos{hash_sign_algos = HashSigns}, Cert, HashBlackList,
 		{Major, Minor} = Version)
   when Major >= 3 andalso Minor >= 3 ->
-    #'OTPCertificate'{tbsCertificate = TBSCert} =public_key:pkix_decode_cert(Cert, otp),
+    #'OTPCertificate'{tbsCertificate = TBSCert} = public_key:pkix_decode_cert(Cert, otp),
     #'OTPSubjectPublicKeyInfo'{algorithm = {_,Algo, _}} = TBSCert#'OTPTBSCertificate'.subjectPublicKeyInfo,
-    DefaultHashSign = {_, Sign} = select_hashsign_algs(undefined, Algo, Version),
     case lists:filter(fun({sha, dsa = S}) when S == Sign ->
 			      true;
 			 ({_, dsa}) ->
 			      false;
 			 ({Hash, S}) when  S == Sign ->
-			      ValidHashes = tls_v1:hash_signs(Version, HashBlackList),
+			      ValidHashes = tls_v1:hashes(Version) -- HashBlacklist,
 			      ssl_cipher:is_acceptable_hash(Hash, ValidHashes);
 			 (_)  ->
 			      false
 		      end, HashSigns) of
 	[] ->
-	    DefaultHashSign;
+	    ?ALERT_REC(?FATAL, ?INSUFFICIENT_SECURITY);
 	[HashSign| _] ->
 	    HashSign
     end;
@@ -1077,18 +1076,22 @@ available_suites(ServerCert, UserSuites, Version, HashSigns, Curve) ->
 
 filter_hashsigns([], [], _, Acc) ->
     lists:reverse(Acc);
-filter_hashsigns([Suite | Suites], [{KeyAlgo,_,_,_} | Algos], HashSigns , Acc) when KeyAlgo == ecdhe_ecdsa;
-										    KeyAlgo == ecdh_ecdsa ->
-    
+filter_hashsigns([Suite | Suites], [{KeyAlgo,_,_,_} | Algos], HashSigns , Acc) when KeyExchange == dh_ecdsa;
+										    KeyExchange == dhe_ecdsa;
+										    KeyExchange == ecdh_ecdsa;
+										    KeyExchange == ecdhe_ecdsa ->
     do_filter_hashsigns(ecdsa, Suite, Suites, Algos, HashSign, Acc);
 
-filter_hashsigns([Suite | Suites], [KeyExAlgo | Algos], HashSigns , Acc) when KeyAlgo == ecdhe_rsa;
-									      KeyAlgo == ecdh_rsa;
-									      KeyAlgo == dhe_rsa;
-									      KeyAlgo == rsa ->
+filter_hashsigns([Suite | Suites], [{KeyAlgo,_,_,_} | Algos], HashSigns , Acc) when KeyExchange == rsa;
+										    KeyExchange == dh_rsa; 
+										    KeyExchange == dhe_rsa;
+										    KeyExchange == ecdhe_rsa;
+										    KeyExchange == srp_rsa ->
     do_filter_hashsigns(rsa, Suite, Suites, Algos, HashSign, Acc);
 
-filter_hashsigns([Suite | Suites], [KeyExAlgo | Algos], HashSigns , Acc) when KeyAlgo == dhe_dss ->								       
+filter_hashsigns([Suite | Suites], [{KeyAlgo,_,_,_} | Algos], HashSigns , Acc) when KeyExchange == dh_dss; 
+										    KeyExchange == dhe_dss;
+										    KeyExchange == srp_dss ->							       
     do_filter_hashsigns(dsa, Suite, Suites, Algos, HashSign, Acc);
 
 do_filter_hashsigns(SignAlgo, Suite, Suites, Algos, HashSign, Acc) ->
@@ -1099,11 +1102,6 @@ do_filter_hashsigns(SignAlgo, Suite, Suites, Algos, HashSign, Acc) ->
 	    filter_hashsigns(Suites, Algos, HasSigns, Acc);
 	end.
 
-key_exchange_algo({KeyExchangAlgo, _,_}) ->
-    KeyExchangAlgo;
-key_exchange_algo({KeyExchangAlgo, _,_,_}) ->
-    KeyExchangAlgo.
-	
 unavailable_ecc_suites(no_curve) ->
     ssl_cipher:ec_keyed_suites();
 unavailable_ecc_suites(_) ->
