@@ -121,7 +121,7 @@ server_hello_done() ->
     #server_hello_done{}.
 
 client_hello_extensions(Host, Version, CipherSuites, 
-			#ssl_options{hash_blacklist = HashBlacklist} =SslOpts, ConnectionStates, Renegotiation) ->
+			#ssl_options{hash_blacklist = HashBlacklist, versions = AllVersions} = SslOpts, ConnectionStates, Renegotiation) ->
     {EcPointFormats, EllipticCurves} =
 	case advertises_ec_ciphers(lists:map(fun ssl_cipher:suite_definition/1, CipherSuites)) of
 	    true ->
@@ -135,7 +135,7 @@ client_hello_extensions(Host, Version, CipherSuites,
        renegotiation_info = renegotiation_info(tls_record, client,
 					       ConnectionStates, Renegotiation),
        srp = SRP,
-       hash_signs = available_hash_signs(HashBlacklist, Version),
+       hash_signs = available_hash_signs(HashBlacklist, Version, AllVersions),
        ec_point_formats = EcPointFormats,
        elliptic_curves = EllipticCurves,
        alpn = encode_alpn(SslOpts#ssl_options.alpn_advertised_protocols, Renegotiation),
@@ -205,14 +205,13 @@ client_certificate_verify(OwnCert, MasterSecret, Version,
 
 %%--------------------------------------------------------------------
 -spec certificate_request(ssl_cipher:cipher_suite(), db_handle(), 
-			  certdb_ref(), [atom()], ssl_record:ssl_version()) ->
+			  certdb_ref(), list(), ssl_record:ssl_version()) ->
 				 #certificate_request{}.
 %%
 %% Description: Creates a certificate_request message, called by the server.
 %%--------------------------------------------------------------------
-certificate_request(CipherSuite, CertDbHandle, CertDbRef, HashBlacklist, Version) ->
+certificate_request(CipherSuite, CertDbHandle, CertDbRef, HashSigns, Version) ->
     Types = certificate_types(ssl_cipher:suite_definition(CipherSuite), Version),
-    HashSigns = available_hash_signs(HashBlacklist, Version),
     Authorities = certificate_authorities(CertDbHandle, CertDbRef),
     #certificate_request{
 		    certificate_types = Types,
@@ -1074,6 +1073,9 @@ available_suites(ServerCert, UserSuites, Version, HashSigns, Curve) ->
 	-- unavailable_ecc_suites(Curve),
     filter_hashsigns(Suites, [ssl_cipher:suite_definition(Suite) || Suite <- Suites], HasSigns, []).
 
+
+filter_hashsigns(Suites, _, undefined, _) ->
+    Suites;
 filter_hashsigns([], [], _, Acc) ->
     lists:reverse(Acc);
 filter_hashsigns([Suite | Suites], [{KeyAlgo,_,_,_} | Algos], HashSigns , Acc) when KeyExchange == dh_ecdsa;
@@ -1114,7 +1116,7 @@ cipher_suites(Suites, true) ->
 
 select_session(SuggestedSessionId, CipherSuites, HashSigns, Compressions, Port, #session{ecc = ECCCurve} = 
 		   Session, Version,
-	       #ssl_options{ciphers = UserSuites, honor_cipher_order = HCO} = SslOpts,
+	       #ssl_options{ciphers = UserSuites, honor_cipher_order = HonorCipherOrder} = SslOpts,
 	       Cache, CacheCb, Cert) ->
     {SessionId, Resumed} = ssl_session:server_id(Port, SuggestedSessionId,
 						 SslOpts, Cert,
@@ -1122,7 +1124,7 @@ select_session(SuggestedSessionId, CipherSuites, HashSigns, Compressions, Port, 
     case Resumed of
         undefined ->
 	    Suites = available_suites(Cert, UserSuites, Version, HashSigns, ECCCurve),
-	    CipherSuite = select_cipher_suite(CipherSuites, Suites, HCO),
+	    CipherSuite = select_cipher_suite(CipherSuites, Suites, HonorCipherOrder),
 	    Compression = select_compression(Compressions),
 	    {new, Session#session{session_id = SessionId,
 				  cipher_suite = CipherSuite,
@@ -2043,17 +2045,22 @@ is_member(Suite, SupportedSuites) ->
 select_compression(_CompressionMetodes) ->
     ?NULL.
 
-available_hash_signs(HashBlacklist, {Major, Minor} = Version) when Major >= 3 andalso Minor >= 3 ->
-    HashSigns = tls_v1:hash_signs(Version, HashBlacklist),
-    CryptoSupport = crypto:supports(),
-    HasECC = proplists:get_bool(ecdsa,  proplists:get_value(public_keys, CryptoSupport)),
-    #hash_sign_algos{hash_sign_algos =
-			 lists:filter(fun({_, ecdsa}) -> 
-					      HasECC;
-					 ({_, _}) -> 
-					      true 
-				      end, HashSigns)};
-available_hash_signs(_, _) ->
+available_hash_signs(HashBlacklist, {Major, Minor} = Version, AllVersions) when Major >= 3 andalso Minor >= 3 ->
+    case tls_record:lowest_protocol_version(AllVersions) of
+	{3, 3} ->
+	    HashSigns = tls_v1:hash_signs(Version, HashBlacklist),
+	    CryptoSupport = crypto:supports(),
+	    HasECC = proplists:get_bool(ecdsa,  proplists:get_value(public_keys, CryptoSupport)),
+	    #hash_sign_algos{hash_sign_algos =
+				 lists:filter(fun({_, ecdsa}) -> 
+						      HasECC;
+						 ({_, _}) -> 
+						      true 
+					      end, HashSigns)};
+	_ ->
+	    undefined
+    end;	
+available_hash_signs(_, _, _) ->
     undefined.
 
 psk_secret(PSKIdentity, PSKLookup) ->

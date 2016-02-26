@@ -202,19 +202,12 @@ hello(Hello = #client_hello{client_version = ClientVersion,
 			   undefined -> CurrentProtocol;
 			   _ -> Protocol0
 		       end,
-	    %% FOOO
-	    Negotiated =  ssl_connection:negotiated_hashsign(HashSigns, Alg, Version),
-	    case ssl_handshake:select_hashsign(Negotiated, Cert, HashBlacklist, Version)  of
-		#alert{} = Alert ->
-		    handle_own_alert(Alert, Version, hello, State);
-		HashSign ->	  
-		    ssl_connection:hello({common_client_hello, Type, ServerHelloExt, HashSign},
-					 State#state{connection_states  = ConnectionStates,
-						     negotiated_version = Version,
-						     session = Session,
-						     client_ecc = {EllipticCurves, EcPointFormats},
-						     negotiated_protocol = Protocol}, ?MODULE)
-	    end
+	    ssl_connection:hello({common_client_hello, Type, ServerHelloExt},
+				 State#state{connection_states  = ConnectionStates,
+					     negotiated_version = Version,
+					     session = Session,
+					     client_ecc = {EllipticCurves, EcPointFormats},
+					     negotiated_protocol = Protocol}, ?MODULE)
     end;
 
 hello(Hello = #server_hello{},

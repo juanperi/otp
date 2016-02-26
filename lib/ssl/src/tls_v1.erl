@@ -292,7 +292,7 @@ hash_signs({3, 3}, BlackList) ->
 
 hashes({3, 3}) ->
     Hashes = proplists:get_value(hashs, crypto:supports()),
-    [Hash || Hash <- [sha512, sh394, sha256,sha244, sha, md5], lists:member(Hash, Hashes)].
+    [Hash || Hash <- [sha512, sh384, sha256,sha244, sha, md5], lists:member(Hash, Hashes)].
 
 %%--------------------------------------------------------------------
 %%% Internal functions
