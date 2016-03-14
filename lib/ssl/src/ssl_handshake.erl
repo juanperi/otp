@@ -383,8 +383,9 @@ verify_signature(_Version, Hash, _HashAlgo, Signature, {?rsaEncryption, PubKey, 
     end;
 verify_signature(_Version, Hash, {HashAlgo, dsa}, Signature, {?'id-dsa', PublicKey, PublicKeyParams}) ->
     public_key:verify({digest, Hash}, HashAlgo, Signature, {PublicKey, PublicKeyParams});
-verify_signature(_Version, Hash, {HashAlgo, ecdsa}, Signature,
-		 {?'id-ecPublicKey', PublicKey, PublicKeyParams}) ->
+verify_signature(_Version, Hash, {HashAlgo, SignAlg}, Signature,
+		 {?'id-ecPublicKey', PublicKey, PublicKeyParams}) when SignAlg == ecdsa;
+								       SignAlg == rsa ->
     public_key:verify({digest, Hash}, HashAlgo, Signature, {PublicKey, PublicKeyParams}).
 
 %%--------------------------------------------------------------------
