@@ -1038,4 +1038,3 @@ ec_key({PubKey, PrivateKey}, Params) ->
 		    privateKey = PrivateKey,
 		    parameters = Params,
 		    publicKey = PubKey}.
-

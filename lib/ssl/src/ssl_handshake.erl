@@ -384,8 +384,7 @@ verify_signature(_Version, Hash, _HashAlgo, Signature, {?rsaEncryption, PubKey, 
 verify_signature(_Version, Hash, {HashAlgo, dsa}, Signature, {?'id-dsa', PublicKey, PublicKeyParams}) ->
     public_key:verify({digest, Hash}, HashAlgo, Signature, {PublicKey, PublicKeyParams});
 verify_signature(_Version, Hash, {HashAlgo, SignAlg}, Signature,
-		 {?'id-ecPublicKey', PublicKey, PublicKeyParams}) when SignAlg == ecdsa;
-								       SignAlg == rsa ->
+		 {?'id-ecPublicKey', PublicKey, PublicKeyParams}) when SignAlg == ecdsa; SignAlg == rsa ->
     public_key:verify({digest, Hash}, HashAlgo, Signature, {PublicKey, PublicKeyParams}).
 
 %%--------------------------------------------------------------------
@@ -592,16 +591,15 @@ select_hashsign(_, undefined, _, _Version) ->
 select_hashsign(HashSigns, Cert, undefined, {Major, Minor} = Version)  when Major >= 3 andalso Minor >= 3->
     select_hashsign(HashSigns, Cert, tls_v1:default_hash_signs(Version), Version);
 select_hashsign(#hash_sign_algos{hash_sign_algos = HashSigns}, Cert, SupportedHashSigns,
-		{Major, Minor} = Version)
-  when Major >= 3 andalso Minor >= 3 ->
+		{Major, Minor}) when Major >= 3 andalso Minor >= 3 ->
     #'OTPCertificate'{tbsCertificate = TBSCert} = public_key:pkix_decode_cert(Cert, otp),
     #'OTPSubjectPublicKeyInfo'{algorithm = {_,Algo, _}} = TBSCert#'OTPTBSCertificate'.subjectPublicKeyInfo,
-    {_, Sign} = select_hashsign_algs(undefined, Algo, Version),
-    case lists:filter(fun({sha, dsa = S}) when S == Sign ->
+    {Hash, Sign} = cert_hash_sign(Algo),
+    case lists:filter(fun({sha = H, dsa = S}) when H == Hash, S == Sign ->
 			      true;
 			 ({_, dsa}) ->
 			      false;
-			 ({_, S} = Algos) when  S == Sign ->
+			 ({H, S} = Algos) when  H == Hash, S == Sign ->
 			      lists:member(Algos, SupportedHashSigns);
 			 (_)  ->
 			      false
@@ -643,10 +641,10 @@ select_hashsign_algs(HashSign, _, {Major, Minor}) when HashSign =/= undefined an
     HashSign;
 select_hashsign_algs(undefined, ?rsaEncryption, {Major, Minor}) when Major >= 3 andalso Minor >= 3 ->
     {sha, rsa};
+select_hashsign_algs(undefined, ?'sha1WithRSAEncryption', _) ->
+    {sha, rsa};
 select_hashsign_algs(undefined,?'id-ecPublicKey', _) ->
     {sha, ecdsa};
-select_hashsign_algs(undefined, ?sha1WithRSAEncryption, _) -> 
-    {sha, rsa};
 select_hashsign_algs(undefined, ?rsaEncryption, _) -> 
     {md5sha, rsa};
 select_hashsign_algs(undefined, ?'id-dsa', _) ->
@@ -656,14 +654,14 @@ select_hashsign_algs(undefined, ?'id-dsa', _) ->
 %% Wrap function to keep the knowledge of the default values in
 %% one place only 
 select_hashsign_algs(Alg, Version) when (Alg == rsa orelse
-					 Alg == dh_rsa orelse
 					 Alg == dhe_rsa orelse
-					 Alg == srp_rsa) ->    
+					 Alg == ecdhe_rsa orelse
+					 Alg == rsa_psk orelse 
+					 Alg == srp_rsa) -> 
     select_hashsign_algs(undefined, ?rsaEncryption, Version);
-select_hashsign_algs(Alg, Version) when (Alg == ecdhe_rsa orelse
-					 Alg == ecdh_rsa orelse 
-					 Alg == rsa_psk) ->    
-    select_hashsign_algs(undefined, ?sha1WithRSAEncryption, Version);
+select_hashsign_algs(Alg, Version) when (Alg == dh_rsa orelse
+					 Alg == ecdh_rsa ) -> 
+    select_hashsign_algs(undefined, ?'sha1WithRSAEncryption', Version);
 select_hashsign_algs(Alg, Version) when (Alg == dhe_dss orelse
 					 Alg == dh_dss orelse
 					 Alg == srp_dss) ->
@@ -2171,3 +2169,12 @@ distpoints_lookup([DistPoint | Rest], Callback, CRLDbHandle) ->
 	CRLs ->
 	    [{DistPoint, {CRL, public_key:der_decode('CertificateList', CRL)}} ||  CRL <- CRLs]
     end.	
+
+cert_hash_sign(?rsaEncryption) ->
+    {sha, rsa};
+cert_hash_sign(?'id-ecPublicKey') ->
+    {sha, ecdsa};
+cert_hash_sign(?'id-dsa') ->
+    {sha, dsa};
+cert_hash_sign(Alg) ->
+    public_key:pkix_sign_types(Alg).
