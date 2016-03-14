@@ -645,6 +645,8 @@ select_hashsign_algs(undefined, ?rsaEncryption, {Major, Minor}) when Major >= 3 
     {sha, rsa};
 select_hashsign_algs(undefined,?'id-ecPublicKey', _) ->
     {sha, ecdsa};
+select_hashsign_algs(undefined, ?sha1WithRSAEncryption, _) -> 
+    {sha, rsa};
 select_hashsign_algs(undefined, ?rsaEncryption, _) -> 
     {md5sha, rsa};
 select_hashsign_algs(undefined, ?'id-dsa', _) ->
@@ -654,15 +656,17 @@ select_hashsign_algs(undefined, ?'id-dsa', _) ->
 %% Wrap function to keep the knowledge of the default values in
 %% one place only 
 select_hashsign_algs(Alg, Version) when (Alg == rsa orelse
-				    Alg == dhe_rsa orelse
-				    Alg == dh_rsa orelse
-				    Alg == ecdhe_rsa orelse
-				    Alg == ecdh_rsa orelse
-				    Alg == srp_rsa) ->    
+					 Alg == dh_rsa orelse
+					 Alg == dhe_rsa orelse
+					 Alg == srp_rsa) ->    
     select_hashsign_algs(undefined, ?rsaEncryption, Version);
+select_hashsign_algs(Alg, Version) when (Alg == ecdhe_rsa orelse
+					 Alg == ecdh_rsa orelse 
+					 Alg == rsa_psk) ->    
+    select_hashsign_algs(undefined, ?sha1WithRSAEncryption, Version);
 select_hashsign_algs(Alg, Version) when (Alg == dhe_dss orelse
-				    Alg == dh_dss orelse
-				    Alg == srp_dss) ->
+					 Alg == dh_dss orelse
+					 Alg == srp_dss) ->
     select_hashsign_algs(undefined, ?'id-dsa', Version);
 select_hashsign_algs(Alg, Version) when (Alg == ecdhe_ecdsa orelse
 					 Alg == ecdh_ecdsa) ->
@@ -1954,7 +1958,7 @@ from_2bytes(<<?UINT16(N), Rest/binary>>, Acc) ->
 key_exchange_alg(rsa) ->
     ?KEY_EXCHANGE_RSA;
 key_exchange_alg(Alg) when Alg == dhe_rsa; Alg == dhe_dss;
-			    Alg == dh_dss; Alg == dh_rsa; Alg == dh_anon ->
+			   Alg == dh_dss; Alg == dh_rsa; Alg == dh_anon ->
     ?KEY_EXCHANGE_DIFFIE_HELLMAN;
 key_exchange_alg(Alg) when Alg == ecdhe_rsa; Alg == ecdh_rsa;
 			   Alg == ecdhe_ecdsa; Alg == ecdh_ecdsa;
