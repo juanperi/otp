@@ -109,9 +109,10 @@ send_handshake(Handshake, State) ->
 queue_handshake(Handshake, #state{negotiated_version = Version,
 				  tls_handshake_history = Hist0,
 				  flight_buffer = Flight0,
+				  ssl_options = #ssl_options{v2_hello_compatible = V2HComp},				  
 				  connection_states = ConnectionStates0} = State0) ->
     {BinHandshake, ConnectionStates, Hist} =
-	encode_handshake(Handshake, Version, ConnectionStates0, Hist0),
+	encode_handshake(Handshake, Version, ConnectionStates0, Hist0, V2HComp),
     State0#state{connection_states = ConnectionStates,
 		 tls_handshake_history = Hist,
 		 flight_buffer = Flight0 ++ [BinHandshake]}.
@@ -185,7 +186,7 @@ init([Role, Host, Port, Socket, Options,  User, CbInfo]) ->
 
 init({call, From}, {start, Timeout}, 
      #state{host = Host, port = Port, role = client,
-	    ssl_options = SslOpts,
+	    ssl_options = #ssl_options{v2_hello_compatible = V2HComp} = SslOpts,
 	    session = #session{own_certificate = Cert} = Session0,
 	    transport_cb = Transport, socket = Socket,
 	    connection_states = ConnectionStates0,
@@ -201,7 +202,7 @@ init({call, From}, {start, Timeout},
     HelloVersion = tls_record:lowest_protocol_version(SslOpts#ssl_options.versions),
     Handshake0 = ssl_handshake:init_handshake_history(),
     {BinMsg, ConnectionStates, Handshake} =
-        encode_handshake(Hello,  HelloVersion, ConnectionStates0, Handshake0),
+        encode_handshake(Hello,  HelloVersion, ConnectionStates0, Handshake0, V2HComp),
     Transport:send(Socket, BinMsg),
     State1 = State0#state{connection_states = ConnectionStates,
 			  negotiated_version = Version, %% Requested version
@@ -464,9 +465,9 @@ code_change(_OldVsn, StateName, State, _) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
-encode_handshake(Handshake, Version, ConnectionStates0, Hist0) ->
+encode_handshake(Handshake, Version, ConnectionStates0, Hist0, V2HComp) ->
     Frag = tls_handshake:encode_handshake(Handshake, Version),
-    Hist = ssl_handshake:update_handshake_history(Hist0, Frag),
+    Hist = ssl_handshake:update_handshake_history(Hist0, Frag, V2HComp),
     {Encoded, ConnectionStates} =
         ssl_record:encode_handshake(Frag, Version, ConnectionStates0),
     {Encoded, ConnectionStates, Hist}.
