@@ -424,18 +424,24 @@ handle_common_event(internal,  #ssl_tls{type = ?HANDSHAKE, fragment = Data},
 				      ssl_options = Options} = State0) ->
     try
 	{Packets, Buf} = tls_handshake:get_tls_handshake(Version,Data,Buf0, Options),
-	State =
+	State1 =
 	    State0#state{protocol_buffers =
 			     Buffers#protocol_buffers{tls_handshake_buffer = Buf}},
-	Events = tls_handshake_events(Packets),
-	case StateName of
-	    connection ->
-		ssl_connection:hibernate_after(StateName, State, Events);
-	    _ ->
-		{next_state, StateName, State#state{unprocessed_handshake_events = unprocessed_events(Events)}, Events}
-	end
+	case Packets of
+            [] -> 
+                {Record, State} = next_record(State1),
+                next_event(StateName, Record, State);
+            _ ->
+                Events = tls_handshake_events(Packets),
+                case StateName of
+                    connection ->
+                        ssl_connection:hibernate_after(StateName, State1, Events);
+                    _ ->
+                        {next_state, StateName, State1#state{unprocessed_handshake_events = unprocessed_events(Events)}, Events}
+                end
+        end
     catch throw:#alert{} = Alert ->
-	    ssl_connection:handle_own_alert(Alert, Version, StateName, State0)
+            ssl_connection:handle_own_alert(Alert, Version, StateName, State0)
     end;
 %%% TLS record protocol level application data messages 
 handle_common_event(internal, #ssl_tls{type = ?APPLICATION_DATA, fragment = Data}, StateName, State) ->
