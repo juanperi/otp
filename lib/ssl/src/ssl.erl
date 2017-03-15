@@ -39,8 +39,8 @@
 	]).
 %% SSL/TLS protocol handling
 -export([cipher_suites/0, cipher_suites/1, eccs/0, eccs/1,
-	 connection_info/1, versions/0, session_info/1, format_error/1,
-     renegotiate/1, prf/5, negotiated_protocol/1, negotiated_next_protocol/1,
+	 connection_info/1, versions/0, format_error/1,
+         renegotiate/1, prf/5, negotiated_protocol/1, negotiated_next_protocol/1,
 	 connection_information/1, connection_information/2]).
 %% Misc
 -export([handle_options/2, tls_version/1]).
@@ -307,7 +307,7 @@ controlling_process(#sslsocket{pid = {Listen,
 %% Description: Return SSL information for the connection
 %%--------------------------------------------------------------------
 connection_information(#sslsocket{pid = Pid}) when is_pid(Pid) -> 
-    case ssl_connection:connection_information(Pid) of
+    case ssl_connection:connection_information(Pid, false) of
 	{ok, Info} ->
 	    {ok, [Item || Item = {_Key, Value} <- Info,  Value =/= undefined]};
 	Error ->
@@ -323,8 +323,8 @@ connection_information(#sslsocket{pid = {udp,_}}) ->
 %%
 %% Description: Return SSL information for the connection
 %%--------------------------------------------------------------------
-connection_information(#sslsocket{} = SSLSocket, Items) -> 
-    case connection_information(SSLSocket) of
+connection_information(#sslsocket{pid = Pid}, Items) when is_pid(Pid) -> 
+    case ssl_connection:connection_information(Pid, include_security_info(Items)) of
         {ok, Info} ->
             {ok, [Item || Item = {Key, Value} <- Info,  lists:member(Key, Items),
 			  Value =/= undefined]};
@@ -1480,3 +1480,13 @@ default_cb_info(tls) ->
     {gen_tcp, tcp, tcp_closed, tcp_error};
 default_cb_info(dtls) ->
     {gen_udp, udp, udp_closed, udp_error}.
+
+include_security_info([]) ->
+    false;
+include_security_info([Item | Items]) ->
+    case lists:member(Item, [client_random, server_random, master_secret]) of
+        true ->
+            true;
+        false  ->
+            include_security_info(Items)
+    end.
