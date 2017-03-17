@@ -1326,7 +1326,7 @@ do_supports_ssl_tls_version(Port) ->
 		false ->
 		    do_supports_ssl_tls_version(Port)
 	    end
-    after 500 ->
+    after 1000 ->
 	    true
     end.
 
