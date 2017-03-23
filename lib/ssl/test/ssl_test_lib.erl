@@ -511,7 +511,7 @@ make_ecdsa_cert(Config) ->
              
 	     {server_ecdsa_verify_opts, [{ssl_imp, new}, {reuseaddr, true},
 					 {verify, verify_peer} | ServerConf]},
-	     {client_ecdsa_opts, [{ssl_imp, new}, {reuseaddr, true}  | ClientConf]}
+	     {client_ecdsa_opts, ClientConf}
 	     | Config];
 	false ->
 	    Config
@@ -533,21 +533,34 @@ make_ecdh_rsa_cert(Config) ->
     CryptoSupport = crypto:supports(),
     case proplists:get_bool(ecdh, proplists:get_value(public_keys, CryptoSupport)) of
 	true ->
-	    {ServerCaCertFile, ServerCertFile, ServerKeyFile} = 
-		make_cert_files("server", Config, rsa, ec, "rsa_", []),
-	    {ClientCaCertFile, ClientCertFile, ClientKeyFile} = 
-		make_cert_files("client", Config, rsa, ec, "rsa_",[]),
-	    [{server_ecdh_rsa_opts, [{ssl_imp, new},{reuseaddr, true},
-				     {cacertfile, ServerCaCertFile},
-				     {certfile, ServerCertFile}, {keyfile, ServerKeyFile}]},
-	     {server_ecdh_rsa_verify_opts, [{ssl_imp, new},{reuseaddr, true},
-					    {cacertfile, ClientCaCertFile},
-					    {certfile, ServerCertFile}, {keyfile, ServerKeyFile},
-					    {verify, verify_peer}]},
-	     {client_ecdh_rsa_opts, [{ssl_imp, new},
-				     {cacertfile, ClientCaCertFile},
-				     {certfile, ClientCertFile}, {keyfile, ClientKeyFile}]}
-	     | Config];
+	    %% {ServerCaCertFile, ServerCertFile, ServerKeyFile} = 
+	    %%     make_cert_files("server", Config, rsa, ec, "rsa_", []),
+	    %% {ClientCaCertFile, ClientCertFile, ClientKeyFile} = 
+	    %%     make_cert_files("client", Config, rsa, ec, "rsa_",[]),
+
+            CertFileBase = filename:join([proplists:get_value(priv_dir, Config), "ecdh_rsa_cert.pem"]),
+            KeyFileBase = filename:join([proplists:get_value(priv_dir, Config), "ecdh_rsa_key.pem"]),
+            CaCertFileBase = filename:join([proplists:get_value(priv_dir, Config), "ecdh_cacerts.pem"]),
+            CurveOid = hd(tls_v1:ecc_curves(0)),
+            GenCertData = x509_test:gen_test_certs([{server_key_gen, {namedCurve, CurveOid}}, 
+                                                    {client_key_gen, {namedCurve, CurveOid}},
+                                                    {server_key_gen_chain, [{namedCurve, CurveOid},
+                                                                            {rsa, 2048, 17}]},
+                                                    {client_key_gen_chain, [{namedCurve, CurveOid},
+                                                                            {rsa, 2048, 17}]},
+                                                    {digest, appropriate_sha(CryptoSupport)}]),
+            [{server_config, ServerConf}, 
+             {client_config, ClientConf}] = 
+                x509_test:gen_pem_config_files(GenCertData, CertFileBase, KeyFileBase, CaCertFileBase),
+
+	    [{server_ecdh_rsa_opts, [{ssl_imp, new},{reuseaddr, true} | ServerConf]},
+				    
+	     {server_ecdh_rsa_verify_opts, [{ssl_imp, new},{reuseaddr, true}, 	 
+                                            {verify, verify_peer} | ServerConf]},
+					
+	     {client_ecdh_rsa_opts, ClientConf}
+				   
+             | Config];
 	_ ->
 	    Config
     end.

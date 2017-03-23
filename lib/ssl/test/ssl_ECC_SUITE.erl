@@ -73,7 +73,7 @@ ecc_negotiation() ->
      ecc_default_order_custom_curves,
      ecc_client_order,
      ecc_client_order_custom_curves,
-     ecc_unknown_curve,
+     %%ecc_unknown_curve,
      client_ecdh_server_ecdh_ecc_server_custom,
      client_rsa_server_ecdh_ecc_server_custom,
      client_ecdh_server_rsa_ecc_server_custom,
@@ -277,15 +277,12 @@ ecc_unknown_curve(Config) ->
     ECCOpts = [{eccs, ['123_fake_curve']}],
     ecc_test_error(COpts, SOpts, [], ECCOpts, Config).
 
-%% We can only expect to see a named curve on a conn with
-%% a server supporting ecdsa. Otherwise the curve is selected
-%% but not used and communicated to the client?
 client_ecdh_server_ecdh_ecc_server_custom(Config) ->
     COpts =  proplists:get_value(client_ecdh_rsa_opts, Config),
     SOpts = proplists:get_value(server_ecdh_rsa_opts, Config),
     ECCOpts = [{honor_ecc_order, true}, {eccs, [secp256r1, sect571r1]}],
     case supported_eccs(ECCOpts) of
-        true -> ecc_test(undefined, COpts, SOpts, [], ECCOpts, Config);
+        true -> ecc_test(secp256r1, COpts, SOpts, [], ECCOpts, Config);
         false -> {skip, "unsupported named curves"}
     end.
 
@@ -303,7 +300,7 @@ client_rsa_server_ecdh_ecc_server_custom(Config) ->
     SOpts = proplists:get_value(server_ecdh_rsa_opts, Config),
     ECCOpts = [{honor_ecc_order, true}, {eccs, [secp256r1, sect571r1]}],
     case supported_eccs(ECCOpts) of
-        true -> ecc_test(undefined, COpts, SOpts, [], ECCOpts, Config);
+        true -> ecc_test(secp256r1, COpts, SOpts, [], ECCOpts, Config);
         false -> {skip, "unsupported named curves"}
     end.
 
