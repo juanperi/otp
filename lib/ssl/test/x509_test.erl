@@ -20,97 +20,98 @@
 
 %%
 
--module(x509_test).
+ -module(x509_test).
 
--include_lib("public_key/include/public_key.hrl").
+ -include_lib("public_key/include/public_key.hrl").
 
--export([gen_test_certs/1, gen_pem_config_files/4]).
+ -export([gen_test_certs/1, gen_pem_config_files/4]).
 
-gen_test_certs(Opts) ->
-    SRootKey = gen_key(proplists:get_value(server_key_gen, Opts)),
-    CRootKey = gen_key(proplists:get_value(client_key_gen, Opts)),
-    ServerRoot = root_cert("server", SRootKey, Opts),
-    ClientRoot = root_cert("client", CRootKey, Opts),
-    [{ServerCert, ServerKey} | ServerCAsKeys] = config(server, ServerRoot, SRootKey, Opts),
-    [{ClientCert, ClientKey} | ClientCAsKeys] = config(client, ClientRoot, CRootKey, Opts),
-    ServerCAs = ca_config(ClientRoot, ServerCAsKeys),
-    ClientCAs = ca_config(ServerRoot, ClientCAsKeys),
-    [{server_config, [{cert, ServerCert}, {key, ServerKey}, {cacerts, ServerCAs}]}, 
-     {client_config, [{cert, ClientCert}, {key, ClientKey}, {cacerts, ClientCAs}]}].
+ gen_test_certs(Opts) ->
+     SRootKey = gen_key(proplists:get_value(server_key_gen, Opts)),
+     CRootKey = gen_key(proplists:get_value(client_key_gen, Opts)),
+     ServerRoot = root_cert("server", SRootKey, Opts),
+     ClientRoot = root_cert("client", CRootKey, Opts),
+     [{ServerCert, ServerKey} | ServerCAsKeys] = config(server, ServerRoot, SRootKey, Opts),
+     [{ClientCert, ClientKey} | ClientCAsKeys] = config(client, ClientRoot, CRootKey, Opts),
+     ServerCAs = ca_config(ClientRoot, ServerCAsKeys),
+     ClientCAs = ca_config(ServerRoot, ClientCAsKeys),
+     [{server_config, [{cert, ServerCert}, {key, ServerKey}, {cacerts, ServerCAs}]}, 
+      {client_config, [{cert, ClientCert}, {key, ClientKey}, {cacerts, ClientCAs}]}].
 
-gen_pem_config_files(GenCertData, CertFileBase, KeyFileBase, CAFileBase) ->
-    ServerConf = proplists:get_value(server_config, GenCertData),
-    ClientConf = proplists:get_value(client_config, GenCertData),
-    
-    ServerCaCertFile = filename:join("server_", CAFileBase),
-    ServerCertFile = filename:join("server_", CertFileBase),
-    ServerKeyFile = filename:join("server_", KeyFileBase),
-    
-    ClientCaCertFile = filename:join("client_", CAFileBase),
-    ClientCertFile = filename:join("client_", CertFileBase),
-    ClientKeyFile = filename:join("client_", KeyFileBase),
-    
-    do_gen_pem_config_files(ServerConf,
-                            ServerCertFile,
-                            ServerKeyFile,
-                            ServerCaCertFile),        
-    do_gen_pem_config_files(ClientConf,
-                            ClientCertFile,
-                            ClientKeyFile,
-                            ClientCaCertFile),
-    [{server_config, [{certfile, ServerCertFile}, {keyfile, ServerKeyFile}, {cacertfile, ServerCaCertFile}]}, 
-     {client_config, [{certfile, ClientCertFile}, {keyfile, ClientKeyFile}, {cacertfile, ClientCaCertFile}]}].
+ gen_pem_config_files(GenCertData, CertFileBase, KeyFileBase, CAFileBase) ->
+     ServerConf = proplists:get_value(server_config, GenCertData),
+     ClientConf = proplists:get_value(client_config, GenCertData),
 
-    
-do_gen_pem_config_files(Config, CertFile, KeyFile, CAFile) ->
-    CAs = proplists:get_value(cacerts, Config),
-    Cert = proplists:get_value(cert, Config),
-    Key = proplists:get_value(key, Config),
-    der_to_pem(CertFile, [cert_entry(Cert)]),
-    der_to_pem(KeyFile, [key_entry(Key)]),
-    der_to_pem(CAFile, ca_entries(CAs)).
-   
-cert_entry(Cert) ->
-    {'Certificate', Cert, not_encrypted}.
+     ServerCaCertFile = filename:join("server_", CAFileBase),
+     ServerCertFile = filename:join("server_", CertFileBase),
+     ServerKeyFile = filename:join("server_", KeyFileBase),
 
-key_entry(Key = #'RSAPrivateKey'{}) ->
-    Der = public_key:der_encode('RSAPrivateKey', Key),
-    {'RSAPrivateKey', Der, not_encrypted};
-key_entry(Key = #'DSAPrivateKey'{}) ->
-    Der =  public_key:der_encode('DSAPrivateKey', Key),
-    {'DSAPrivateKey', Der, not_encrypted};
-key_entry(Key = #'ECPrivateKey'{}) ->
-    Der =  public_key:der_encode('ECPrivateKey', Key),
-    {'ECPrivateKey', Der, not_encrypted}.
+     ClientCaCertFile = filename:join("client_", CAFileBase),
+     ClientCertFile = filename:join("client_", CertFileBase),
+     ClientKeyFile = filename:join("client_", KeyFileBase),
 
-ca_entries(CAs) ->
-    [{'Certificate', CACert, not_encrypted} || CACert <- CAs].
+     do_gen_pem_config_files(ServerConf,
+                             ServerCertFile,
+                             ServerKeyFile,
+                             ServerCaCertFile),        
+     do_gen_pem_config_files(ClientConf,
+                             ClientCertFile,
+                             ClientKeyFile,
+                             ClientCaCertFile),
+     [{server_config, [{certfile, ServerCertFile}, {keyfile, ServerKeyFile}, {cacertfile, ServerCaCertFile}]}, 
+      {client_config, [{certfile, ClientCertFile}, {keyfile, ClientKeyFile}, {cacertfile, ClientCaCertFile}]}].
 
-gen_key(KeyGen) ->
-    case is_key(KeyGen) of
-        true ->
-            KeyGen;
-        false ->
-            public_key:generate_key(KeyGen)
-    end.
 
-root_cert(Role, PrivKey, Opts) ->
-    TBS = cert_template(),
-    Issuer = issuer("root", Role, " ROOT CA"),
-    OTPTBS = TBS#'OTPTBSCertificate'{
-               signature = sign_algorithm(PrivKey, Opts),
-               issuer = Issuer,
-               validity = validity(Opts),  
-               subject = Issuer,
-               subjectPublicKeyInfo = public_key(PrivKey),
-               extensions = extensions(Opts)
-              },
-    public_key:pkix_sign(OTPTBS, PrivKey).
+ do_gen_pem_config_files(Config, CertFile, KeyFile, CAFile) ->
+     CAs = proplists:get_value(cacerts, Config),
+     Cert = proplists:get_value(cert, Config),
+     Key = proplists:get_value(key, Config),
+     der_to_pem(CertFile, [cert_entry(Cert)]),
+     der_to_pem(KeyFile, [key_entry(Key)]),
+     der_to_pem(CAFile, ca_entries(CAs)).
 
-config(Role, Root, Key, Opts) ->
-    KeyGenOpt = list_to_atom(atom_to_list(Role) ++ "key_gen_chain"),
-    KeyGens = proplists:get_value(KeyGenOpt, Opts, [{namedCurve, hd(tls_v1:ecc_curves(0))}, 
-                                                    {namedCurve, hd(tls_v1:ecc_curves(0))}]),
+ cert_entry(Cert) ->
+     {'Certificate', Cert, not_encrypted}.
+
+ key_entry(Key = #'RSAPrivateKey'{}) ->
+     Der = public_key:der_encode('RSAPrivateKey', Key),
+     {'RSAPrivateKey', Der, not_encrypted};
+ key_entry(Key = #'DSAPrivateKey'{}) ->
+     Der =  public_key:der_encode('DSAPrivateKey', Key),
+     {'DSAPrivateKey', Der, not_encrypted};
+ key_entry(Key = #'ECPrivateKey'{}) ->
+     Der =  public_key:der_encode('ECPrivateKey', Key),
+     {'ECPrivateKey', Der, not_encrypted}.
+
+ ca_entries(CAs) ->
+     [{'Certificate', CACert, not_encrypted} || CACert <- CAs].
+
+ gen_key(KeyGen) ->
+     case is_key(KeyGen) of
+         true ->
+             KeyGen;
+         false ->
+             public_key:generate_key(KeyGen)
+     end.
+
+ root_cert(Role, PrivKey, Opts) ->
+     TBS = cert_template(),
+     Issuer = issuer("root", Role, " ROOT CA"),
+     OTPTBS = TBS#'OTPTBSCertificate'{
+                signature = sign_algorithm(PrivKey, Opts),
+                issuer = Issuer,
+                validity = validity(Opts),  
+                subject = Issuer,
+                subjectPublicKeyInfo = public_key(PrivKey),
+                extensions = extensions(Opts)
+               },
+     public_key:pkix_sign(OTPTBS, PrivKey).
+
+ config(Role, Root, Key, Opts) ->
+     KeyGenOpt = list_to_atom(atom_to_list(Role) ++ "_key_gen_chain"),
+     KeyGens = proplists:get_value(KeyGenOpt, Opts, [{namedCurve, hd(tls_v1:ecc_curves(0))}, 
+                                                     {namedCurve, hd(tls_v1:ecc_curves(0))}]),
+    ct:pal(" ~p  ~p", [KeyGenOpt, KeyGens]),
     Keys = lists:map(fun gen_key/1, KeyGens),
     cert_chain(Role, Root, Key, Opts, Keys).
 

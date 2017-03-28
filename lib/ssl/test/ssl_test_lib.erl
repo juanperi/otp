@@ -489,10 +489,6 @@ make_ecdsa_cert(Config) ->
     CryptoSupport = crypto:supports(),
     case proplists:get_bool(ecdsa, proplists:get_value(public_keys, CryptoSupport)) of
         true ->
-	    %% {ServerCaCertFile, ServerCertFile, ServerKeyFile} = 
-	    %%     make_cert_files("server", Config, ec, ec, "", [{digest, appropriate_sha(CryptoSupport)}]),
-	    %% {ClientCaCertFile, ClientCertFile, ClientKeyFile} = 
-	    %%     make_cert_files("client", Config, ec, ec, "", [{digest, appropriate_sha(CryptoSupport)}]),
             CertFileBase = filename:join([proplists:get_value(priv_dir, Config), "ecdsa_cert.pem"]),
             KeyFileBase = filename:join([proplists:get_value(priv_dir, Config), "ecdsa_key.pem"]),
             CaCertFileBase = filename:join([proplists:get_value(priv_dir, Config), "ecdsa_cacerts.pem"]),
@@ -533,21 +529,18 @@ make_ecdh_rsa_cert(Config) ->
     CryptoSupport = crypto:supports(),
     case proplists:get_bool(ecdh, proplists:get_value(public_keys, CryptoSupport)) of
 	true ->
-	    %% {ServerCaCertFile, ServerCertFile, ServerKeyFile} = 
-	    %%     make_cert_files("server", Config, rsa, ec, "rsa_", []),
-	    %% {ClientCaCertFile, ClientCertFile, ClientKeyFile} = 
-	    %%     make_cert_files("client", Config, rsa, ec, "rsa_",[]),
-
             CertFileBase = filename:join([proplists:get_value(priv_dir, Config), "ecdh_rsa_cert.pem"]),
             KeyFileBase = filename:join([proplists:get_value(priv_dir, Config), "ecdh_rsa_key.pem"]),
             CaCertFileBase = filename:join([proplists:get_value(priv_dir, Config), "ecdh_cacerts.pem"]),
             CurveOid = hd(tls_v1:ecc_curves(0)),
             GenCertData = x509_test:gen_test_certs([{server_key_gen, {namedCurve, CurveOid}}, 
                                                     {client_key_gen, {namedCurve, CurveOid}},
-                                                    {server_key_gen_chain, [{namedCurve, CurveOid},
-                                                                            {rsa, 2048, 17}]},
-                                                    {client_key_gen_chain, [{namedCurve, CurveOid},
-                                                                            {rsa, 2048, 17}]},
+                                                    {server_key_gen_chain, [{rsa, 2048, 17},
+                                                                            {namedCurve, CurveOid}
+                                                                           ]},
+                                                    {client_key_gen_chain, [{rsa, 2048, 17},
+                                                                            {namedCurve, CurveOid}
+                                                                           ]},
                                                     {digest, appropriate_sha(CryptoSupport)}]),
             [{server_config, ServerConf}, 
              {client_config, ClientConf}] = 
