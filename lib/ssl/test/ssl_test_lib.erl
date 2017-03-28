@@ -512,7 +512,32 @@ make_ecdsa_cert(Config) ->
 	false ->
 	    Config
     end.
-
+make_rsa_cert(Config) ->
+    CryptoSupport = crypto:supports(),
+    case proplists:get_bool(rsa, proplists:get_value(public_keys, CryptoSupport)) of
+        true ->
+            CertFileBase = filename:join([proplists:get_value(priv_dir, Config), "rsa_cert.pem"]),
+            KeyFileBase = filename:join([proplists:get_value(priv_dir, Config), "rsa_key.pem"]),
+            CaCertFileBase = filename:join([proplists:get_value(priv_dir, Config), "rsa_cacerts.pem"]),
+            GenCertData = x509_test:gen_test_certs([{server_key_gen, {rsa, 2048, 17}}, 
+                                                    {client_key_gen, {rsa, 2048, 17}},
+                                                    {server_key_gen_chain, [{rsa, 2048, 17},
+                                                                            {rsa, 2048, 17}]},
+                                                    {client_key_gen_chain, [{rsa, 2048, 17},
+                                                                            {rsa, 2048, 17}]},
+                                                    {digest, appropriate_sha(CryptoSupport)}]),
+            [{server_config, ServerConf}, 
+             {client_config, ClientConf}] = 
+                x509_test:gen_pem_config_files(GenCertData, CertFileBase, KeyFileBase, CaCertFileBase),
+	    [{server_rsa_opts, [{ssl_imp, new},{reuseaddr, true} | ServerConf]},
+             
+	     {server_rsa_verify_opts, [{ssl_imp, new}, {reuseaddr, true},
+					 {verify, verify_peer} | ServerConf]},
+	     {client_rsa_opts, ClientConf}
+	     | Config];
+	false ->
+	    Config
+    end.
 appropriate_sha(CryptoSupport) ->
     case proplists:get_bool(sha256, CryptoSupport) of
 	true ->
