@@ -411,6 +411,42 @@ hello_version(Version, Versions) ->
             lowest_protocol_version(Versions)
     end.
 
+init_replay_window(Size) ->
+    #{size => Size,
+      top => Size,
+      bottom => 0,
+      mask => 0 bsl 64
+     }.
+
+replay_detect(#ssl_tls{sequence_number = SequenceNumber}, #{replay_window := Window} = ConnectionStates) ->
+    is_replay(SequenceNumber, Window).
+
+
+is_replay(SequenceNumber, #{bottom := Bottom}) when SequenceNumber < Bottom ->
+    true;
+is_replay(SequenceNumber, #{size := Size,
+                            top := Top,
+                            bottom := Bottom,
+                            mask :=  Mask})  when (SequenceNumber >= Bottom) andalso (SequenceNumber =< Top) ->
+    Index = (SequenceNumber rem Size),
+    (Index band Mask) == 1;
+
+is_replay(_, _) ->
+    false.
+
+update_replay_window(SequenceNumber,  #{replay_window := #{size := Size,
+                                                           top := Top,
+                                                           bottom := Bottom,
+                                                           mask :=  Mask0} = Window} = ConnectionStates) ->
+    NoNewBits = SequenceNumber - Top,
+    Index = SequenceNumber rem Size,
+    Mask = (Mask0 bsl NoNewBits) bor Index,
+    Window =  #{size => Size,
+                top => SequenceNumber,
+                bottom => Bottom + NoNewBits,
+                mask => Mask},
+    ConnectionStates#{replay_window := Window}.
+
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
@@ -419,6 +455,7 @@ initial_connection_state(ConnectionEnd, BeastMitigation) ->
 	  ssl_record:initial_security_params(ConnectionEnd),
       epoch => undefined,
       sequence_number => 0,
+      replay_window => init_replay_window(64),
       beast_mitigation => BeastMitigation,
       compression_state  => undefined,
       cipher_state  => undefined,
@@ -499,8 +536,9 @@ decode_cipher_text(#ssl_tls{type = Type, version = Version,
 	{PlainFragment, CipherState} ->
 	    {Plain, CompressionS1} = ssl_record:uncompress(CompAlg,
 							   PlainFragment, CompressionS0),
-	    ReadState = ReadState0#{compression_state => CompressionS1,
+	    ReadState0 = ReadState0#{compression_state => CompressionS1,
                                     cipher_state => CipherState},
+            ReadState = update_replay_window(Seq, ReadState0),
 	    ConnnectionStates = set_connection_state_by_epoch(ReadState, Epoch, ConnnectionStates0, read),
 	    {CipherText#ssl_tls{fragment = Plain}, ConnnectionStates};
 	  #alert{} = Alert ->
@@ -523,7 +561,8 @@ decode_cipher_text(#ssl_tls{type = Type, version = Version,
 	    {Plain, CompressionS1} = ssl_record:uncompress(CompAlg,
 							   PlainFragment, CompressionS0),
 	    
-	    ReadState = ReadState1#{compression_state => CompressionS1},
+	    ReadState2 = ReadState1#{compression_state => CompressionS1},
+            ReadState = update_replay_window(Seq, ReadState2),
 	    ConnnectionStates = set_connection_state_by_epoch(ReadState, Epoch, ConnnectionStates0, read),
 	    {CipherText#ssl_tls{fragment = Plain}, ConnnectionStates};
 	false ->

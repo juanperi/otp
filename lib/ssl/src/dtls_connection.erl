@@ -690,14 +690,15 @@ next_record(#state{unprocessed_handshake_events = N} = State) when N > 0 ->
 next_record(#state{protocol_buffers =
 		       #protocol_buffers{dtls_cipher_texts = [CT | Rest]}
 		   = Buffers,
-		   connection_states = ConnStates0} = State) ->
-    case dtls_record:decode_cipher_text(CT, ConnStates0) of
-	{Plain, ConnStates} ->		      
-	    {Plain, State#state{protocol_buffers =
-				    Buffers#protocol_buffers{dtls_cipher_texts = Rest},
-				connection_states = ConnStates}};
-	#alert{} = Alert ->
-	    {Alert, State}
+		   connection_states = ConnStates} = State) ->
+    case dtls_record:replay_detect(CT, ConnStates) of
+        true ->
+            decode_cipher_text(State#state{connection_states = ConnStates}) ;
+        false ->
+            %% Ignore replayed record
+            next_record(State#state{protocol_buffers =
+                                        Buffers#protocol_buffers{dtls_cipher_texts = Rest},
+                                    connection_states = ConnStates})
     end;
 next_record(#state{role = server,
 		   socket = {Listener, {Client, _}},
@@ -768,6 +769,17 @@ next_event(StateName, Record,
 	    {next_state, StateName, State, Actions};
 	#alert{} = Alert ->
 	    {next_state, StateName, State, [{next_event, internal, Alert} | Actions]}
+    end.
+
+decode_cipher_text(#state{protocol_buffers = #protocol_buffers{dtls_cipher_texts = [ CT | Rest]} = Buffers,
+                          connection_states = ConnStates0} = State) ->
+    case dtls_record:decode_cipher_text(CT, ConnStates0) of
+	{Plain, ConnStates} ->		      
+	    {Plain, State#state{protocol_buffers =
+				    Buffers#protocol_buffers{dtls_cipher_texts = Rest},
+				connection_states = ConnStates}};
+	#alert{} = Alert ->
+	    {Alert, State}
     end.
 
 dtls_version(hello, Version, #state{role = server} = State) ->
