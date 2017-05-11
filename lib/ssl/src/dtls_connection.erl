@@ -690,11 +690,12 @@ next_record(#state{unprocessed_handshake_events = N} = State) when N > 0 ->
 next_record(#state{protocol_buffers =
 		       #protocol_buffers{dtls_cipher_texts = [CT | Rest]}
 		   = Buffers,
-		   connection_states = ConnStates} = State) ->
-    case dtls_record:replay_detect(CT, ConnStates) of
-        true ->
-            decode_cipher_text(State#state{connection_states = ConnStates}) ;
+		   connection_states = #{current_read := CurrentRead} = ConnStates} = State) ->
+    case dtls_record:replay_detect(CT, CurrentRead) of
         false ->
+            decode_cipher_text(State#state{connection_states = ConnStates}) ;
+        true ->
+            ct:pal("Replay detect", []),            
             %% Ignore replayed record
             next_record(State#state{protocol_buffers =
                                         Buffers#protocol_buffers{dtls_cipher_texts = Rest},

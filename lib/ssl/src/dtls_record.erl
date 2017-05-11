@@ -46,7 +46,7 @@
 	 is_higher/2, supported_protocol_versions/0,
 	 is_acceptable_version/2, hello_version/2]).
 
--export([save_current_connection_state/2, next_epoch/2]).
+-export([save_current_connection_state/2, next_epoch/2, replay_detect/2]).
 
 -export([init_connection_state_seq/2, current_connection_state_epoch/2]).
 
@@ -411,41 +411,6 @@ hello_version(Version, Versions) ->
             lowest_protocol_version(Versions)
     end.
 
-init_replay_window(Size) ->
-    #{size => Size,
-      top => Size,
-      bottom => 0,
-      mask => 0 bsl 64
-     }.
-
-replay_detect(#ssl_tls{sequence_number = SequenceNumber}, #{replay_window := Window} = ConnectionStates) ->
-    is_replay(SequenceNumber, Window).
-
-
-is_replay(SequenceNumber, #{bottom := Bottom}) when SequenceNumber < Bottom ->
-    true;
-is_replay(SequenceNumber, #{size := Size,
-                            top := Top,
-                            bottom := Bottom,
-                            mask :=  Mask})  when (SequenceNumber >= Bottom) andalso (SequenceNumber =< Top) ->
-    Index = (SequenceNumber rem Size),
-    (Index band Mask) == 1;
-
-is_replay(_, _) ->
-    false.
-
-update_replay_window(SequenceNumber,  #{replay_window := #{size := Size,
-                                                           top := Top,
-                                                           bottom := Bottom,
-                                                           mask :=  Mask0} = Window} = ConnectionStates) ->
-    NoNewBits = SequenceNumber - Top,
-    Index = SequenceNumber rem Size,
-    Mask = (Mask0 bsl NoNewBits) bor Index,
-    Window =  #{size => Size,
-                top => SequenceNumber,
-                bottom => Bottom + NoNewBits,
-                mask => Mask},
-    ConnectionStates#{replay_window := Window}.
 
 %%--------------------------------------------------------------------
 %%% Internal functions
@@ -594,3 +559,39 @@ mac_hash({Major, Minor}, MacAlg, MacSecret, Epoch, SeqNo, Type, Length, Fragment
     
 calc_aad(Type, {MajVer, MinVer}, Epoch, SeqNo) ->
     <<?UINT16(Epoch), ?UINT48(SeqNo), ?BYTE(Type), ?BYTE(MajVer), ?BYTE(MinVer)>>.
+
+init_replay_window(Size) ->
+    #{size => Size,
+      top => Size,
+      bottom => 0,
+      mask => 0 bsl 64
+     }.
+
+replay_detect(#ssl_tls{sequence_number = SequenceNumber}, #{replay_window := Window}) ->
+    is_replay(SequenceNumber, Window).
+
+
+is_replay(SequenceNumber, #{bottom := Bottom}) when SequenceNumber < Bottom ->
+    true;
+is_replay(SequenceNumber, #{size := Size,
+                            top := Top,
+                            bottom := Bottom,
+                            mask :=  Mask})  when (SequenceNumber >= Bottom) andalso (SequenceNumber =< Top) ->
+    Index = (SequenceNumber rem Size),
+    (Index band Mask) == 1;
+
+is_replay(_, _) ->
+    false.
+
+update_replay_window(SequenceNumber,  #{replay_window := #{size := Size,
+                                                           top := Top,
+                                                           bottom := Bottom,
+                                                           mask :=  Mask0} = Window} = ConnectionStates) ->
+    NoNewBits = SequenceNumber - Top,
+    Index = SequenceNumber rem Size,
+    Mask = (Mask0 bsl NoNewBits) bor Index,
+    Window =  #{size => Size,
+                top => SequenceNumber,
+                bottom => Bottom + NoNewBits,
+                mask => Mask},
+    ConnectionStates#{replay_window := Window}.
