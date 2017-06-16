@@ -1121,8 +1121,13 @@ der_cert(#'OTPCertificate'{} = Cert) ->
 der_cert(Der) when is_binary(Der) ->
     Der.
 
-pkix_crls_validate(_, [],_, _, _) ->
-    {bad_cert, revocation_status_undetermined};
+pkix_crls_validate(_, [],_, Options, #revoke_state{details = Details}) ->
+     case proplists:get_value(undetermined_details, Options, false) of
+         false ->
+             {bad_cert, revocation_status_undetermined};
+         true ->
+             {bad_cert, {revocation_status_undetermined, {bad_crls, format_details(Details)}}}
+     end;
 pkix_crls_validate(OtpCert, [{DP, CRL, DeltaCRL} | Rest],  All, Options, RevokedState0) ->
     CallBack = proplists:get_value(update_crl, Options, fun(_, CurrCRL) ->
 							       CurrCRL
@@ -1142,9 +1147,15 @@ pkix_crls_validate(OtpCert, [{DP, CRL, DeltaCRL} | Rest],  All, Options, Revoked
 do_pkix_crls_validate(OtpCert, [{DP, CRL, DeltaCRL} | Rest],  All, Options, RevokedState0) ->
     OtherDPCRLs = All -- [{DP, CRL, DeltaCRL}],
     case pubkey_crl:validate(OtpCert, OtherDPCRLs, DP, CRL, DeltaCRL, Options, RevokedState0) of
-	{undetermined, _, _} when Rest == []->
-	    {bad_cert, revocation_status_undetermined};
-	{undetermined, _, RevokedState} when Rest =/= []->
+	{undetermined, unrevoked, #revoke_state{details = Details}} when Rest == []->
+            ct:pal("FOOBAR ~p", [Details]),
+            case proplists:get_value(undetermined_details, Options, false) of
+                false ->
+                    {bad_cert, revocation_status_undetermined};
+                true ->
+                    {bad_cert, {revocation_status_undetermined, {bad_crls, Details}}}
+            end;
+	{undetermined, unrevoked, RevokedState} when Rest =/= []->
 	    pkix_crls_validate(OtpCert, Rest, All, Options, RevokedState);
 	{finished, unrevoked} ->
 	    valid;
@@ -1417,3 +1428,7 @@ to_lower_ascii(C) -> C.
 to_string(S) when is_list(S) -> S;
 to_string(B) when is_binary(B) -> binary_to_list(B).
 
+format_details([]) ->
+    no_relevant_crls;
+format_details(Details) ->
+    Details.
