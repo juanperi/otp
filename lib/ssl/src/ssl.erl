@@ -547,11 +547,14 @@ sockname(#sslsocket{pid = Pid, fd = {Transport, Socket, _, _}}) when is_pid(Pid)
 %% Description: Returns a list of relevant versions.
 %%--------------------------------------------------------------------
 versions() ->
-    Vsns = tls_record:supported_protocol_versions(),
-    SupportedVsns = [tls_record:protocol_version(Vsn) || Vsn <- Vsns],
-    AvailableVsns = ?ALL_AVAILABLE_VERSIONS,
-    %% TODO Add DTLS versions when supported
-    [{ssl_app, ?VSN}, {supported, SupportedVsns}, {available, AvailableVsns}].
+    TLSVsns = tls_record:supported_protocol_versions(),
+    DTLSVsns = dtls_record:supported_protocol_versions(),
+    SupportedTLSVsns = [tls_record:protocol_version(Vsn) || Vsn <- TLSVsns],
+    SupportedDTLSVsns = [dtls_record:protocol_version(Vsn) || Vsn <- DTLSVsns],
+    AvailableTLSVsns = ?ALL_AVAILABLE_VERSIONS,
+    AvailableDTLSVsns = ?ALL_AVAILABLE_DATAGRAM_VERSIONS,
+    [{ssl_app, ?VSN}, {supported, SupportedTLSVsns ++ SupportedDTLSVsns}, 
+     {available, AvailableTLSVsns ++ AvailableDTLSVsns}].
 
 
 %%---------------------------------------------------------------
