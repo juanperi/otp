@@ -42,7 +42,7 @@
 -export([next_record/1, next_event/3, next_event/4,  handle_common_event/4]).
 
 %% Handshake handling
--export([renegotiate/2, send_handshake/2, 
+-export([renegotiate/2, send_handshake/2, send_application_data/5,
          queue_handshake/2, queue_change_cipher/2,
          reinit_handshake_data/1, select_sni_extension/1, empty_connection_state/2]).
 
@@ -51,7 +51,7 @@
 
 %% Data handling
 -export([encode_data/3, passive_receive/2, next_record_if_active/1,
-	 send/3, socket/5, setopts/3, getopts/3]).
+	 send/3, send_application_data/5, socket/5, setopts/3, getopts/3]).
 
 %% gen_statem state functions
 -export([init/3, error/3, downgrade/3, %% Initiation and take down states
@@ -403,6 +403,9 @@ send(Transport, {_, {{_,_}, _} = Socket}, Data) ->
     send(Transport, Socket, Data);
 send(Transport, Socket, Data) ->
    dtls_socket:send(Transport, Socket, Data).
+
+send_application_data(Transport, Socket, Data, _From, _State) ->
+    {reply, send(Transport, Socket, Data)}.
 
 socket(Pid,  Transport, Socket, Connection, _) ->
     dtls_socket:socket(Pid, Transport, Socket, Connection).

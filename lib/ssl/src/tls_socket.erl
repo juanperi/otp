@@ -24,7 +24,7 @@
 -include("ssl_internal.hrl").
 -include("ssl_api.hrl").
 
--export([send/3, listen/3, accept/3, socket/5, connect/4, upgrade/3,
+-export([send/3, send/4, listen/3, accept/3, socket/5, connect/4, upgrade/3,
 	 setopts/3, getopts/3, getstat/3, peername/2, sockname/2, port/2]).
 -export([split_options/1, get_socket_opts/3]).
 -export([emulated_options/0, emulated_options/1, internal_inet_values/0, default_inet_values/0,
@@ -44,7 +44,14 @@
 %%--------------------------------------------------------------------
 send(Transport, Socket, Data) ->
     Transport:send(Socket, Data).
-
+send(Transport, Socket, Data, Options) ->
+    try Transport:send(Socket, Data,  Options) of
+        Result ->
+            Result
+    catch _:_ ->
+            send(Transport, Socket, Data)
+    end.
+     
 listen(Transport, Port, #config{transport_info = {Transport, _, _, _}, 
 				inet_user = Options, 
 				ssl = SslOpts, emulated = EmOpts} = Config) ->

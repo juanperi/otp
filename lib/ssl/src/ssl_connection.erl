@@ -378,18 +378,23 @@ write_application_data(Data0, From,
 			      transport_cb = Transport,
 			      connection_states = ConnectionStates0,
 			      socket_options = SockOpts,
-			      ssl_options = #ssl_options{renegotiate_at = RenegotiateAt}} = State) ->
+			      ssl_options = #ssl_options{renegotiate_at = RenegotiateAt}} = State0) ->
     Data = encode_packet(Data0, SockOpts),
     
     case time_to_renegotiate(Data, ConnectionStates0, RenegotiateAt) of
 	true ->
-	    Connection:renegotiate(State#state{renegotiation = {true, internal}}, 
+	    Connection:renegotiate(State0#state{renegotiation = {true, internal}}, 
 			[{next_event, {call, From}, {application_data, Data0}}]);
 	false ->
-	    {Msgs, ConnectionStates} = Connection:encode_data(Data, Version, ConnectionStates0),
-	    Result = Connection:send(Transport, Socket, Msgs),
-	        ssl_connection:hibernate_after(connection, State#state{connection_states = ConnectionStates}, 
-					       [{reply, From, Result}])
+	    {Msgs, ConnectionStates} =
+                Connection:encode_data(Data, Version, ConnectionStates0),
+            State = State0#state{connection_states = ConnectionStates},
+	    case Connection:send_application_data(Transport, Socket, Msgs, From, State) of            
+                {reply, Reply} ->                    
+                    hibernate_after(connection, State, [{reply, From, Reply}]);
+                {return, Return} ->
+                    Return
+            end
     end.
 
 read_application_data(Data, #state{user_application = {_Mon, Pid},
@@ -1143,9 +1148,10 @@ handle_info({'EXIT', _Sup, shutdown}, _StateName, State) ->
 handle_info({'EXIT', Socket, normal}, _StateName, #state{socket = Socket} = State) ->
     %% Handle as transport close"
     {stop, {shutdown, transport_closed}, State};
+handle_info({'EXIT', Socket, Reason}, _StateName, #state{socket = Socket} = State) ->
+    {stop, {shutdown, Reason}, State};
 handle_info(allow_renegotiate, StateName, State) ->
     {next_state, StateName, State#state{allow_renegotiate = true}};
-
 handle_info({cancel_start_or_recv, StartFrom}, StateName,
 	    #state{renegotiation = {false, first}} = State) when StateName =/= connection ->
     {stop_and_reply, {shutdown, user_timeout},  
@@ -1157,7 +1163,6 @@ handle_info({cancel_start_or_recv, RecvFrom}, StateName,
 					timer = undefined}, [{reply, RecvFrom, {error, timeout}}]};
 handle_info({cancel_start_or_recv, _RecvFrom}, StateName, State) ->
     {next_state, StateName, State#state{timer = undefined}};
-
 handle_info(Msg, StateName, #state{socket = Socket, error_tag = Tag} = State) ->
     Report = io_lib:format("SSL: Got unexpected info: ~p ~n", [{Msg, Tag, Socket}]),
     error_logger:info_report(Report),
@@ -2072,9 +2077,8 @@ terminate_alert({Reason, _}, Version, ConnectionStates, Connection) when Reason 
 		     Version, ConnectionStates);
 
 terminate_alert(_, Version, ConnectionStates, Connection) ->
-    {BinAlert, _} = Connection:encode_alert(?ALERT_REC(?FATAL, ?INTERNAL_ERROR),
-					    Version, ConnectionStates),
-    BinAlert.
+    Connection:encode_alert(?ALERT_REC(?FATAL, ?INTERNAL_ERROR),
+					    Version, ConnectionStates).
 
 handle_trusted_certs_db(#state{ssl_options = 
 				   #ssl_options{cacertfile = <<>>, cacerts = []}}) ->
