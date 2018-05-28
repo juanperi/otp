@@ -23,7 +23,7 @@
 
 -export([connect/3, connect/4, listen/2, accept/1, accept/2,
 	 shutdown/2, close/1]).
--export([send/2, recv/2, recv/3, unrecv/2]).
+-export([send/2, send/3, recv/2, recv/3, unrecv/2]).
 -export([controlling_process/2]).
 -export([fdopen/2]).
 
@@ -266,6 +266,20 @@ send(S, Packet) when is_port(S) ->
     case inet_db:lookup_socket(S) of
 	{ok, Mod} ->
 	    Mod:send(S, Packet);
+	Error ->
+	    Error
+    end.
+
+-spec send(Socket, Packet, Options) -> ok | {error, Reason} when
+      Socket  :: socket(),
+      Packet  :: iodata(),
+      Options :: list(),
+      Reason  :: closed | busy | inet:posix().
+
+send(S, Packet, Options) when is_port(S) ->
+    case inet_db:lookup_socket(S) of
+	{ok, Mod} ->
+	    Mod:send(S, Packet, Options);
 	Error ->
 	    Error
     end.
