@@ -57,13 +57,13 @@
 -export([encode_alert/3, send_alert/2, close/5, protocol_name/0]).
 
 %% Data handling
--export([encode_data/3, passive_receive/2, next_record_if_active/1, send/3,
+-export([encode_data/3, passive_receive/2, next_record_if_active/1, send/3, send_application_data/5, blocking_send/5,
          socket/5, setopts/3, getopts/3]).
 
 %% gen_statem state functions
 -export([init/3, error/3, downgrade/3, %% Initiation and take down states
 	 hello/3, user_hello/3, certify/3, cipher/3, abbreviated/3, %% Handshake states 
-	 connection/3, death_row/3]).
+	 connection/3, connection_blocking_send/3, death_row/3]).
 %% gen_statem callbacks
 -export([callback_mode/0, terminate/3, code_change/4, format_status/2]).
  
@@ -376,6 +376,27 @@ next_record_if_active(State) ->
 
 send(Transport, Socket, Data) ->
    tls_socket:send(Transport, Socket, Data).
+send_application_data(Transport, Socket, Data, From, #state{protocol_specific = Map} = State) ->
+    try tls_socket:send(Transport, Socket, Data, [nosuspend]) of
+        ok ->
+            {reply, ok};
+        {error, busy} ->
+            Pid = spawn_link(?MODULE, blocking_send, [self(), ?MODULE, 
+                                                      Transport, Socket, Data]),
+            PS = Map#{blocking_send => Pid},
+            {return, {next_state, connection_blocking_send, 
+                      State#state{protocol_specific = PS}}};
+        OtherErr ->
+            {reply, OtherErr}
+    catch _:_ ->
+            {reply, send(Transport, Socket, Data)}
+    end.
+
+blocking_send(From, ConnectionPid, Transport, Socket, Msgs)->
+    %% When we know that send will block due to busy port
+    Result = send(Transport, Socket, Msgs),
+    gen_statem:cast(ConnectionPid, {unblock_send, From, Result}).
+   
 
 socket(Pid,  Transport, Socket, Connection, Tracker) ->
     tls_socket:socket(Pid, Transport, Socket, Connection, Tracker).
@@ -542,42 +563,20 @@ cipher(Type, Event, State) ->
 		 #hello_request{} | #client_hello{}| term(), #state{}) ->
 			gen_statem:state_function_result().
 %%--------------------------------------------------------------------
-connection(info, Event, State) ->
-    gen_info(Event, ?FUNCTION_NAME, State);
-connection(internal, #hello_request{},
-	   #state{role = client, host = Host, port = Port,
-		  session = #session{own_certificate = Cert} = Session0,
-		  session_cache = Cache, session_cache_cb = CacheCb,
-		  ssl_options = SslOpts,
-		  connection_states = ConnectionStates0,
-		  renegotiation = {Renegotiation, _}} = State0) ->
-    Hello = tls_handshake:client_hello(Host, Port, ConnectionStates0, SslOpts,
-				       Cache, CacheCb, Renegotiation, Cert),
-    {State1, Actions} = send_handshake(Hello, State0),
-    {Record, State} =
-	next_record(
-	  State1#state{session = Session0#session{session_id
-						  = Hello#client_hello.session_id}}),
-    next_event(hello, Record, State, Actions);
-connection(internal, #client_hello{} = Hello, 
-	   #state{role = server, allow_renegotiate = true} = State0) ->
-    %% Mitigate Computational DoS attack
-    %% http://www.educatedguesswork.org/2011/10/ssltls_and_computational_dos.html
-    %% http://www.thc.org/thc-ssl-dos/ Rather than disabling client
-    %% initiated renegotiation we will disallow many client initiated
-    %% renegotiations immediately after each other.
-    erlang:send_after(?WAIT_TO_ALLOW_RENEGOTIATION, self(), allow_renegotiate),
-    {Record, State} = next_record(State0#state{allow_renegotiate = false,
-					       renegotiation = {true, peer}}),
-    next_event(hello, Record, State,  [{next_event, internal, Hello}]);
-connection(internal, #client_hello{}, 
-	   #state{role = server, allow_renegotiate = false} = State0) ->
-    Alert = ?ALERT_REC(?WARNING, ?NO_RENEGOTIATION),
-    State1 = send_alert(Alert, State0),
-    {Record, State} = ssl_connection:prepare_connection(State1, ?MODULE),
-    next_event(?FUNCTION_NAME, Record, State);
 connection(Type, Event, State) ->
-    ssl_connection:?FUNCTION_NAME(Type, Event, State, ?MODULE).
+    %% This state is implemented by the help function
+    %% handle_connection because we need handle the almost identical
+    %% state connection_blocking_send for handling "busy port" and
+    %% block potiential senders but not the connection process until
+    %% the data has been sent.
+    handle_connection(Type, Event, State).
+
+connection_blocking_send(cast, {unblock_send, ReplyTo, Reply}, State) ->
+    {next_state, connection, State, [{reply, ReplyTo, Reply}]};
+connection_blocking_send({call, _}, {application_data, _Data}, _) ->
+    {keep_state_and_data, [postpone]}; %% Block potential senders
+connection_blocking_send(Type, Event, State) ->
+    handle_connection(Type, Event, State).
 
 %%--------------------------------------------------------------------
 -spec death_row(gen_statem:event_type(), term(), #state{}) ->
@@ -611,6 +610,45 @@ code_change(_OldVsn, StateName, State, _) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
+
+handle_connection(info, Event, State) ->
+    gen_info(Event, connection, State);
+handle_connection(internal, #hello_request{},
+	   #state{role = client, host = Host, port = Port,
+		  session = #session{own_certificate = Cert} = Session0,
+		  session_cache = Cache, session_cache_cb = CacheCb,
+		  ssl_options = SslOpts,
+		  connection_states = ConnectionStates0,
+		  renegotiation = {Renegotiation, _}} = State0) ->
+    Hello = tls_handshake:client_hello(Host, Port, ConnectionStates0, SslOpts,
+				       Cache, CacheCb, Renegotiation, Cert),
+    {State1, Actions} = send_handshake(Hello, State0),
+    {Record, State} =
+	next_record(
+	  State1#state{session = Session0#session{session_id
+						  = Hello#client_hello.session_id}}),
+    next_event(hello, Record, State, Actions);
+handle_connection(internal, #client_hello{} = Hello, 
+	   #state{role = server, allow_renegotiate = true} = State0) ->
+    %% Mitigate Computational DoS attack
+    %% http://www.educatedguesswork.org/2011/10/ssltls_and_computational_dos.html
+    %% http://www.thc.org/thc-ssl-dos/ Rather than disabling client
+    %% initiated renegotiation we will disallow many client initiated
+    %% renegotiations immediately after each other.
+    erlang:send_after(?WAIT_TO_ALLOW_RENEGOTIATION, self(), allow_renegotiate),
+    {Record, State} = next_record(State0#state{allow_renegotiate = false,
+					       renegotiation = {true, peer}}),
+    next_event(hello, Record, State,  [{next_event, internal, Hello}]);
+handle_connection(internal, #client_hello{}, 
+	   #state{role = server, allow_renegotiate = false} = State0) ->
+    Alert = ?ALERT_REC(?WARNING, ?NO_RENEGOTIATION),
+    State1 = send_alert(Alert, State0),
+    {Record, State} = ssl_connection:prepare_connection(State1, ?MODULE),
+    next_event(connection, Record, State);
+handle_connection(Type, Event, State) ->
+    ssl_connection:connection(Type, Event, State, ?MODULE).
+
+
 initial_state(Role, Host, Port, Socket, {SSLOptions, SocketOptions, Tracker}, User,
 	      {CbModule, DataTag, CloseTag, ErrorTag}) ->
     #ssl_options{beast_mitigation = BeastMitigation} = SSLOptions,
@@ -719,6 +757,14 @@ handle_info({CloseTag, Socket}, StateName,
             %% Basically allows the application the opportunity to set {active, once} again
             %% and then receive the final message.
             next_event(StateName, no_record, State)
+    end;
+handle_info({'EXIT', Pid, normal} = Msg, StateName, #state{protocol_specific = Map} = State) ->
+    %% Blocking send process exits normal
+    case maps:get(blocking_send, Map, undefined) of
+        Pid ->
+            {next_state, StateName, State};
+        _ ->
+            ssl_connection:StateName(info, Msg, State, ?MODULE)
     end;
 handle_info(Msg, StateName, State) ->
     ssl_connection:StateName(info, Msg, State, ?MODULE).

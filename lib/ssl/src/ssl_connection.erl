@@ -419,26 +419,26 @@ write_application_data(Data0, {FromPid, _} = From,
 			      transport_cb = Transport,
 			      connection_states = ConnectionStates0,
 			      socket_options = SockOpts,
-			      ssl_options = #ssl_options{renegotiate_at = RenegotiateAt}} = State) ->
+			      ssl_options = #ssl_options{renegotiate_at = RenegotiateAt}} = State0) ->
     Data = encode_packet(Data0, SockOpts),
     
     case time_to_renegotiate(Data, ConnectionStates0, RenegotiateAt) of
 	true ->
-	    Connection:renegotiate(State#state{renegotiation = {true, internal}}, 
+	    Connection:renegotiate(State0#state{renegotiation = {true, internal}}, 
 			[{next_event, {call, From}, {application_data, Data0}}]);
 	false ->
 	    {Msgs, ConnectionStates} =
                 Connection:encode_data(Data, Version, ConnectionStates0),
-            NewState = State#state{connection_states = ConnectionStates},
-	    case Connection:send(Transport, Socket, Msgs) of
-                ok when FromPid =:= self() ->
-                    hibernate_after(connection, NewState, []);
-                Error when FromPid =:= self() ->
-                    stop({shutdown, Error}, NewState);
-                ok ->
-                    hibernate_after(connection, NewState, [{reply, From, ok}]);
-                Result ->
-                    hibernate_after(connection, NewState, [{reply, From, Result}])
+            State = State0#state{connection_states = ConnectionStates},
+	    case Connection:send_application_data(Transport, Socket, Msgs, FromPid, State) of
+                {reply, ok} when FromPid =:= self() -> %% Distribution
+                    hibernate_after(connection, State, []);
+                {reply, Error} when FromPid =:= self() -> %% Distribution
+                    stop({shutdown, Error}, State);
+                {reply, Reply} ->                    
+                    hibernate_after(connection, State, [{reply, From, Reply}]);
+                {return, Return} ->
+                    Return
             end
     end.
 
@@ -1359,7 +1359,6 @@ handle_info(
     %% It seems the user application has linked to us
     %% - ignore that and let the monitor handle this
     {next_state, StateName, State};
-
 %%% So that terminate will be run when supervisor issues shutdown
 handle_info({'EXIT', _Sup, shutdown}, _StateName, State) ->
     stop(shutdown, State);
@@ -1368,7 +1367,6 @@ handle_info({'EXIT', Socket, normal}, _StateName, #state{socket = Socket} = Stat
     stop({shutdown, transport_closed}, State);
 handle_info({'EXIT', Socket, Reason}, _StateName, #state{socket = Socket} = State) ->
     stop({shutdown, Reason}, State);
-
 handle_info(allow_renegotiate, StateName, State) ->
     {next_state, StateName, State#state{allow_renegotiate = true}};
 
@@ -2380,9 +2378,8 @@ terminate_alert({Reason, _}, Version, ConnectionStates, Connection) when Reason 
 		     Version, ConnectionStates);
 
 terminate_alert(_, Version, ConnectionStates, Connection) ->
-    {BinAlert, _} = Connection:encode_alert(?ALERT_REC(?FATAL, ?INTERNAL_ERROR),
-					    Version, ConnectionStates),
-    BinAlert.
+    Connection:encode_alert(?ALERT_REC(?FATAL, ?INTERNAL_ERROR),
+					    Version, ConnectionStates).
 
 handle_trusted_certs_db(#state{ssl_options = 
 				   #ssl_options{cacertfile = <<>>, cacerts = []}}) ->
@@ -2843,3 +2840,5 @@ erl_dist_stop_reason(
     end;
 erl_dist_stop_reason(Reason, _State) ->
     Reason.
+
+
