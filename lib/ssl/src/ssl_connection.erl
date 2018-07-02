@@ -2519,13 +2519,6 @@ ssl_options_list([erl_dist | Keys], [_ | Values], Acc) ->
     ssl_options_list(Keys, Values, Acc);
 ssl_options_list([renegotiate_at | Keys], [_ | Values], Acc) ->
     ssl_options_list(Keys, Values, Acc);
-ssl_options_list([ciphers = Key | Keys], [Value | Values], Acc) ->
-   ssl_options_list(Keys, Values, 
-		    [{Key, lists:map(
-			     fun(Suite) -> 
-				     ssl_cipher:erl_suite_definition(Suite) 
-			     end, Value)} 
-		     | Acc]);
 ssl_options_list([Key | Keys], [Value | Values], Acc) ->
    ssl_options_list(Keys, Values, [{Key, Value} | Acc]).
 
