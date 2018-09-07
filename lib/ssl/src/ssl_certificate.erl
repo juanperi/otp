@@ -81,7 +81,8 @@ trusted_cert_and_path(CertChain, CertDbHandle, CertDbRef, PartialChainHandler) -
 		    %% Trusted must be selfsigned or it is an incomplete chain
 		    handle_path(Trusted, Path, PartialChainHandler);
 		_ ->
-		    %% Root CA could not be verified
+		    %% Root CA could not be verified, but partial
+                    %% chain handler may trusted a cert that we got
 		    handle_incomplete_chain(Path, PartialChainHandler)
 	    end
     end.

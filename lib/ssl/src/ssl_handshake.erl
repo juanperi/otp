@@ -353,7 +353,8 @@ certify(#certificate{asn1_certificates = ASN1Certs}, CertDbHandle, CertDbRef,
 	    {ok, {PublicKeyInfo,_}} ->
 		{PeerCert, PublicKeyInfo};
 	    {error, Reason} ->
-		handle_path_validation_error(Reason, PeerCert, ChainCerts, Opts, Options, CertDbHandle, CertDbRef)
+		handle_path_validation_error(Reason, PeerCert, ChainCerts, Opts, Options, 
+                                             CertDbHandle, CertDbRef)
 	end
     catch
 	error:{badmatch,{asn1, Asn1Reason}} ->
@@ -1308,27 +1309,49 @@ apply_user_fun(Fun, OtpCert, ExtensionOrError, UserState0, SslState, _CertPath) 
 	    {unknown, {SslState, UserState}}
     end.
 
-handle_path_validation_error(Reason, _, [], _, _, _, _) ->
-    path_validation_alert(Reason);
-handle_path_validation_error({bad_cert, Error} = Reason, PeerCert, Chain0, 
-			     Opts, Options, CertDbHandle, CertsDbRef)  when Error == unknown_ca;
-                                                                            Error == invalid_issuer ->
+handle_path_validation_error({bad_cert, unknown_ca} = Reason, PeerCert, Chain,  
+                             Opts, Options, CertDbHandle, CertsDbRef) ->
+    handle_incomplete_chain(PeerCert, Chain, Opts, Options, CertDbHandle, CertsDbRef, Reason);
+handle_path_validation_error({bad_cert, invalid_issuer} = Reason, PeerCert, Chain0, 
+			     Opts, Options, CertDbHandle, CertsDbRef) ->
     case ssl_certificate:certificate_chain(PeerCert, CertDbHandle, CertsDbRef, Chain0) of
-	{ok, _, [PeerCert | Chain0]} -> %% Chain was already in order
-	    path_validation_alert(Reason);
-	{ok, Root, Chain} -> %% Orded chain 
-            {Trusted, Path} = ssl_certificate:trusted_cert_and_path([Root | Chain], 
+	{ok, Root, [PeerCert | Chain] = OrdedChain} when  Chain =/= Chain0 -> %% Chain appaears to be unorded 
+            {Trusted, Path} = ssl_certificate:trusted_cert_and_path(OrdedChain ++ root_candidate(Root), 
                                                                     CertDbHandle, CertsDbRef,
                                                                     Opts#ssl_options.partial_chain),
             case public_key:pkix_path_validation(Trusted, Path, Options) of
 		{ok, {PublicKeyInfo,_}} ->
 		    {PeerCert, PublicKeyInfo};
-		{error, PathError} ->
-		    path_validation_alert(PathError)
-	    end
+                {error, PathError} ->
+		    handle_path_validation_error(PathError, PeerCert, Path,
+                                                 Opts, Options, CertDbHandle, CertsDbRef)
+	    end;
+        _ ->
+            path_validation_alert(Reason)
     end;
 handle_path_validation_error(Reason, _, _, _, _,_, _) ->
     path_validation_alert(Reason).
+
+handle_incomplete_chain(PeerCert, Chain0, Opts, Options, CertDbHandle, CertsDbRef, PathError0) ->
+    case ssl_certificate:certificate_chain(PeerCert, CertDbHandle, CertsDbRef) of
+        {ok, Root, [PeerCert | _] = Chain} when Chain =/= Chain0 -> %% Chain candidate found          
+            {Trusted, Path} = ssl_certificate:trusted_cert_and_path(Chain ++ root_candidate(Root), 
+                                                                    CertDbHandle, CertsDbRef,
+                                                                    Opts#ssl_options.partial_chain),
+            case public_key:pkix_path_validation(Trusted, Path, Options) of
+		{ok, {PublicKeyInfo,_}} ->
+		    {PeerCert, PublicKeyInfo};
+                {error, PathError} ->
+		    path_validation_alert(PathError)
+	    end;
+        _ ->
+            path_validation_alert(PathError0)
+    end.
+
+root_candidate(undefined) ->
+    [];
+root_candidate(Root) ->
+    [Root].
 
 path_validation_alert({bad_cert, cert_expired}) ->
     ?ALERT_REC(?FATAL, ?CERTIFICATE_EXPIRED);
@@ -1342,8 +1365,6 @@ path_validation_alert({bad_cert, unknown_critical_extension}) ->
     ?ALERT_REC(?FATAL, ?UNSUPPORTED_CERTIFICATE);
 path_validation_alert({bad_cert, {revoked, _}}) ->
     ?ALERT_REC(?FATAL, ?CERTIFICATE_REVOKED);
-%%path_validation_alert({bad_cert, revocation_status_undetermined}) ->
-%%   ?ALERT_REC(?FATAL, ?BAD_CERTIFICATE);
 path_validation_alert({bad_cert, {revocation_status_undetermined, Details}}) ->
     Alert = ?ALERT_REC(?FATAL, ?BAD_CERTIFICATE),
     Alert#alert{reason = Details};
