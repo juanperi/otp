@@ -180,6 +180,8 @@ api_tests_tls() ->
      tls_shutdown_write,
      tls_shutdown_both,
      tls_shutdown_error,
+     tls_server_close,
+     tls_client_close,
      peername,
      sockname,
      tls_socket_options,
@@ -2491,6 +2493,46 @@ tls_shutdown_error(Config) when is_list(Config) ->
     {error, closed} = ssl:shutdown(Listen, read_write).
 
 %%-------------------------------------------------------------------
+tls_server_close() ->
+    [{doc,"Test API function ssl:shutdown/2 with option both."}].
+tls_server_close(Config) when is_list(Config) ->
+    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
+    {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
+    Server = ssl_test_lib:start_server([{node, ServerNode}, {port, 0}, 
+					{from, self()}, 
+			   {mfa, {?MODULE, send_recv_result_close, []}},
+			   {options, [{active, false} | ServerOpts]}]),
+    Port  = ssl_test_lib:inet_port(Server),
+    Client = ssl_test_lib:start_client([{node, ClientNode}, {port, Port}, 
+					{host, Hostname},
+			   {from, self()}, 
+			   {mfa, {?MODULE, send_recv_result, []}},
+			   {options, [{active, false} | ClientOpts]}]),
+    
+    ssl_test_lib:check_result(Server, ok, Client, ok).
+
+%%-------------------------------------------------------------------
+tls_client_close() ->
+    [{doc,"Test API function ssl:shutdown/2 with option both."}].
+tls_client_close(Config) when is_list(Config) ->
+    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
+    {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
+    Server = ssl_test_lib:start_server([{node, ServerNode}, {port, 0}, 
+					{from, self()}, 
+			   {mfa, {?MODULE, send_recv_result, []}},
+			   {options, [{active, false} | ServerOpts]}]),
+    Port  = ssl_test_lib:inet_port(Server),
+    Client = ssl_test_lib:start_client([{node, ClientNode}, {port, Port}, 
+					{host, Hostname},
+			   {from, self()}, 
+			   {mfa, {?MODULE, send_recv_result_close, []}},
+			   {options, [{active, false} | ClientOpts]}]),
+    
+    ssl_test_lib:check_result(Server, ok, Client, ok).
+    
+%%-------------------------------------------------------------------
 ciphers_rsa_signed_certs() ->
     [{doc,"Test all rsa ssl cipher suites in highest support ssl/tls version"}].
        
@@ -4431,10 +4473,15 @@ accept_pool(Config) when is_list(Config) ->
 %%--------------------------------------------------------------------
 %% Internal functions ------------------------------------------------
 %%--------------------------------------------------------------------
+send_recv_result_close(Socket) ->
+    ssl:send(Socket, "Hello world"),
+    {ok,"Hello world"} = ssl:recv(Socket, 11),
+    ssl:close(Socket).
 send_recv_result(Socket) ->
     ssl:send(Socket, "Hello world"),
     {ok,"Hello world"} = ssl:recv(Socket, 11),
     ok.
+
 tcp_send_recv_result(Socket) ->
     gen_tcp:send(Socket, "Hello world"),
     {ok,"Hello world"} = gen_tcp:recv(Socket, 11),

@@ -350,8 +350,8 @@ send_alert(Alert, #state{negotiated_version = Version,
                          transport_cb = Transport,
                          connection_states = ConnectionStates0} = StateData0) ->
     {BinMsg, ConnectionStates} =
-	Connection:encode_alert(Alert, Version, ConnectionStates0),
-    Connection:send(Transport, Socket, BinMsg),
+	encode_alert(Alert, Version, ConnectionStates0),
+    send(Transport, Socket, BinMsg),
     StateData0#state{connection_states = ConnectionStates}.
 
 send_alert_in_connection(Alert, #state{protocol_specific = #{sender := Sender}}) ->
