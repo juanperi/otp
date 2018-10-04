@@ -1183,16 +1183,14 @@ fallback(Config) when is_list(Config) ->
     
     Port = ssl_test_lib:inet_port(Server),
     
-    Client =
-	ssl_test_lib:start_client_error([{node, ClientNode}, 
-					 {port, Port}, {host, Hostname},
-					 {from, self()},  {options, 
-							   [{fallback, true}, 
-							    {versions, ['tlsv1']} 
-							    | ClientOpts]}]),
+    ssl_test_lib:start_client_error([{node, ClientNode}, 
+                                     {port, Port}, {host, Hostname},
+                                     {from, self()},  {options, 
+                                                       [{fallback, true}, 
+                                                        {versions, ['tlsv1']} 
+                                                        | ClientOpts]}]),
     
-    ssl_test_lib:check_result(Server, {error,{tls_alert,"inappropriate fallback"}}, 
-			      Client, {error,{tls_alert,"inappropriate fallback"}}).
+    ssl_test_lib:check_result(Server, {error,{tls_alert,"inappropriate fallback"}}).			   
 
 %%--------------------------------------------------------------------
 cipher_format() ->
@@ -2644,15 +2642,14 @@ default_reject_anonymous(Config) when is_list(Config) ->
 					      {from, self()},
 					      {options, ServerOpts}]),
     Port = ssl_test_lib:inet_port(Server),
-    Client = ssl_test_lib:start_client_error([{node, ClientNode}, {port, Port},
-					{host, Hostname},
-			   {from, self()},
-			   {options,
-			    [{ciphers,[CipherSuite]} |
-			     ClientOpts]}]),
-
-    ssl_test_lib:check_result(Server, {error, {tls_alert, "insufficient security"}},
-			      Client, {error, {tls_alert, "insufficient security"}}).
+    ssl_test_lib:start_client_error([{node, ClientNode}, {port, Port},
+                                     {host, Hostname},
+                                     {from, self()},
+                                     {options,
+                                      [{ciphers,[CipherSuite]} |
+                                       ClientOpts]}]),
+    
+    ssl_test_lib:check_result(Server, {error, {tls_alert, "insufficient security"}}).
 
 %%--------------------------------------------------------------------
 ciphers_ecdsa_signed_certs() ->
@@ -3604,14 +3601,13 @@ no_common_signature_algs(Config) when is_list(Config) ->
 					      {options, [{signature_algs, [{sha256, rsa}]}
 							 | ServerOpts]}]),
     Port = ssl_test_lib:inet_port(Server),
-    Client = ssl_test_lib:start_client_error([{node, ClientNode}, {port, Port},
-					      {host, Hostname},
-					      {from, self()}, 
-					      {options, [{signature_algs, [{sha384, rsa}]}
-							 | ClientOpts]}]),
+    ssl_test_lib:start_client_error([{node, ClientNode}, {port, Port},
+                                     {host, Hostname},
+                                     {from, self()}, 
+                                     {options, [{signature_algs, [{sha384, rsa}]}
+                                                | ClientOpts]}]),
     
-    ssl_test_lib:check_result(Server, {error, {tls_alert, "insufficient security"}},
-			      Client, {error, {tls_alert, "insufficient security"}}).
+    ssl_test_lib:check_result(Server, {error, {tls_alert, "insufficient security"}}).
     						
 %%--------------------------------------------------------------------
 

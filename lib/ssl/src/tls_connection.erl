@@ -56,7 +56,9 @@
          empty_connection_state/2]).
 
 %% Alert and close handling
--export([send_alert/2, send_alert_in_connection/2, encode_alert/3, close/5, protocol_name/0]).
+-export([send_alert/2, send_alert_in_connection/2, 
+         send_sync_alert/2,
+         encode_alert/3, close/5, protocol_name/0]).
 
 %% Data handling
 -export([encode_data/3, passive_receive/2, next_record_if_active/1, 
@@ -346,16 +348,24 @@ encode_alert(#alert{} = Alert, Version, ConnectionStates) ->
 
 send_alert(Alert, #state{negotiated_version = Version,
                          socket = Socket,
-                         protocol_cb = Connection, 
                          transport_cb = Transport,
                          connection_states = ConnectionStates0} = StateData0) ->
     {BinMsg, ConnectionStates} =
-	Connection:encode_alert(Alert, Version, ConnectionStates0),
-    Connection:send(Transport, Socket, BinMsg),
+        encode_alert(Alert, Version, ConnectionStates0),
+    send(Transport, Socket, BinMsg),
     StateData0#state{connection_states = ConnectionStates}.
 
 send_alert_in_connection(Alert, #state{protocol_specific = #{sender := Sender}}) ->
     tls_sender:send_alert(Sender, Alert).
+
+send_sync_alert(Alert, #state{protocol_specific = #{sender := Sender}}) ->
+    tls_sender:send_and_ack_alert(Sender, Alert),
+    receive 
+        {Sender, ack_alert} ->
+            ok
+    after ?DEFAULT_TIMEOUT ->
+            erlang:error("foo")
+    end.
 
 %% User closes or recursive call!
 close({close, Timeout}, Socket, Transport = gen_tcp, _,_) ->
@@ -788,8 +798,8 @@ handle_info({CloseTag, Socket}, StateName,
             %% and then receive the final message.
             next_event(StateName, no_record, State)
     end;
-handle_info({'EXIT', Pid, Reason}, _,
-            #state{protocol_specific = Pid} = State) ->
+handle_info({'EXIT', Sender, Reason}, _,
+            #state{protocol_specific = #{sender := Sender}} = State) ->
     {stop, {shutdown, sender_died, Reason}, State};
 handle_info(Msg, StateName, State) ->
     ssl_connection:StateName(info, Msg, State, ?MODULE).
