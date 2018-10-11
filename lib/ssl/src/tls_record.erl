@@ -106,6 +106,8 @@ get_tls_records(Data, Versions, Buffer, SslOpts) ->
 %
 %% Description: Encodes a handshake message to send on the ssl-socket.
 %%--------------------------------------------------------------------
+encode_handshake(Frag, {3, 4}, ConnectionStates) ->
+    tls_record_1_3:encode_handshake(Frag, ConnectionStates);
 encode_handshake(Frag, Version, 
 		 #{current_write :=
 		       #{beast_mitigation := BeastMitigation,
@@ -126,6 +128,8 @@ encode_handshake(Frag, Version,
 %%
 %% Description: Encodes an alert message to send on the ssl-socket.
 %%--------------------------------------------------------------------
+encode_alert_record(Alert, {3, 4}, ConnectionStates) ->
+    tls_record_1_3:encode_handshake(Alert, ConnectionStates);
 encode_alert_record(#alert{level = Level, description = Description},
                     Version, ConnectionStates) ->
     encode_plain_text(?ALERT, Version, <<?BYTE(Level), ?BYTE(Description)>>,
@@ -146,6 +150,8 @@ encode_change_cipher_spec(Version, ConnectionStates) ->
 %%
 %% Description: Encodes data to send on the ssl-socket.
 %%--------------------------------------------------------------------
+encode_data(Data, {3, 4}, ConnectionStates) ->
+    tls_record_1_3:encode_data(Data, ConnectionStates);
 encode_data(Frag, Version,
 	    #{current_write := #{beast_mitigation := BeastMitigation,
 				 security_parameters :=
