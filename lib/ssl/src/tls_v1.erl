@@ -36,6 +36,8 @@
          default_signature_schemes/1, signature_schemes/2,
          groups/1, groups/2, group_to_enum/1, enum_to_group/1]).
 
+-export([derive_secret/4, hkdf_expand_label/4]).
+
 -type named_curve() :: sect571r1 | sect571k1 | secp521r1 | brainpoolP512r1 |
                        sect409k1 | sect409r1 | brainpoolP384r1 | secp384r1 |
                        sect283k1 | sect283r1 | brainpoolP256r1 | secp256k1 | secp256r1 |
@@ -52,6 +54,27 @@
 %% Internal application API
 %%====================================================================
 
+%% TLS 1.3 
+-spec derive_secret(Secret::binary(), Label::binary(),
+                    Messages::binary(), Alg::ssl_cipher_format:hash()) -> Key::binary().
+derive_secret(Secret, Label, Messages, Alg) ->
+    Hash = crypto:hash(mac_algo(Alg), Messages),
+    hkdf_expand_label(Secret, Label,
+                      Hash, alg_length(Alg)).
+%% TLS 1.3 
+-spec hkdf_expand_label(Secret::binary(), Label0::binary(),
+                        Context::binary(), Length::integer()) -> KeyingMaterial::binary().
+hkdf_expand_label(Secret, Label0, Context, Length) ->
+    %% struct {
+    %%     uint16 length = Length;
+    %%     opaque label<7..255> = "tls13 " + Label;
+    %%     opaque context<0..255> = Context;
+    %% } HkdfLabel;
+    Content = << <<"tls13">>/binary, Label0/binary, Context/binary>>,
+    Len = size(Content),
+    HkdfLabel = <<?UINT16(Len), Content/binary>>,
+    hkdf_expand(Secret, HkdfLabel, Length).
+    
 -spec master_secret(integer(), binary(), binary(), binary()) -> binary().
 
 master_secret(PrfAlgo, PreMasterSecret, ClientRandom, ServerRandom) ->
@@ -371,27 +394,16 @@ default_signature_schemes(Version) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
- 
-hkdf_extract(HashAlg, Salt, IKM) -> 
+-spec hkdf_extract(MacAlg::ssl_cipher_format:hash(), Salt::binary(), 
+                   KeyingMaterial::binary()) -> PsedoRandKey::binary().
 
-   %% Options:
-   %%    Hash     a hash function; HashLen denotes the length of the
-   %%             hash function output in octets
+hkdf_extract(MacAlg, Salt, KeyingMaterial) -> 
+    hmac_hash(MacAlg, Salt, KeyingMaterial).
 
-   %% Inputs:
-   %%    salt     optional salt value (a non-secret random value);
-   %%             if not provided, it is set to a string of HashLen zeros.
-   %%    IKM      input keying material
-
-   %% Output:
-   %%    PRK      a pseudorandom key (of HashLen octets)
-
-   %% The output PRK is calculated as follows:
-
-    %%HMAC-Hash(salt, IKM)
-    hmac_hash(HashAlg, Salt, IKM).
-                                
-hkdf_expand(PRK, Info, L) -> 
+-spec hkdf_expand(PsedoRandKey::binary(), ContextInfo::binary(),
+                  Length:integer()) -> KeyingMaterial::binary().
+                     
+hkdf_expand(PsedoRandKey, ContextInfo, Length) -> 
 
    %% Options:
    %%    Hash     a hash function; HashLen denotes the length of the
@@ -424,25 +436,6 @@ hkdf_expand(PRK, Info, L) ->
    %% (where the constant concatenated to the end of each T(n) is a
    %% single octet.)
   <<>>.
-
-hkdf_expand_label(Secret, Label0, Context, Length) ->
-    HkdfLabel = <<?UINT16(Length),
-                  "tls13"/binary, Label0/binary, Context/binary>>,
-    hkdf_expand(Secret, HkdfLabel, Length).
-
-       %% Where HkdfLabel is specified as:
-
-       %% struct {
-       %%     uint16 length = Length;
-       %%     opaque label<7..255> = "tls13 " + Label;
-       %%     opaque context<0..255> = Context;
-       %% } HkdfLabel;
-
-derive_secret(Secret, Label, Messages, Alg) ->
-    Hash = crypto:hash(mac_algo(Alg), Messages),
-    hkdf_expand_label(Secret, Label,
-                      Hash, alg_length(Alg)).
-                            
 
 %%%% HMAC and the Pseudorandom Functions RFC 2246 & 4346 - 5.%%%%
 hmac_hash(?NULL, _, _) ->
