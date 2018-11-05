@@ -371,6 +371,79 @@ default_signature_schemes(Version) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
+ 
+hkdf_extract(HashAlg, Salt, IKM) -> 
+
+   %% Options:
+   %%    Hash     a hash function; HashLen denotes the length of the
+   %%             hash function output in octets
+
+   %% Inputs:
+   %%    salt     optional salt value (a non-secret random value);
+   %%             if not provided, it is set to a string of HashLen zeros.
+   %%    IKM      input keying material
+
+   %% Output:
+   %%    PRK      a pseudorandom key (of HashLen octets)
+
+   %% The output PRK is calculated as follows:
+
+    %%HMAC-Hash(salt, IKM)
+    hmac_hash(HashAlg, Salt, IKM).
+                                
+hkdf_expand(PRK, Info, L) -> 
+
+   %% Options:
+   %%    Hash     a hash function; HashLen denotes the length of the
+   %%             hash function output in octets
+
+   %% Inputs:
+   %%    PRK      a pseudorandom key of at least HashLen octets
+   %%             (usually, the output from the extract step)
+   %%    info     optional context and application specific information
+   %%             (can be a zero-length string)
+   %%    L        length of output keying material in octets
+   %%             (<= 255*HashLen)
+
+   %% Output:
+   %%    OKM      output keying material (of L octets)
+
+   %% The output OKM is calculated as follows:
+
+   %% N = ceil(L/HashLen)
+   %% T = T(1) | T(2) | T(3) | ... | T(N)
+   %% OKM = first L octets of T
+
+   %% where:
+   %% T(0) = empty string (zero length)
+   %% T(1) = HMAC-Hash(PRK, T(0) | info | 0x01)
+   %% T(2) = HMAC-Hash(PRK, T(1) | info | 0x02)
+   %% T(3) = HMAC-Hash(PRK, T(2) | info | 0x03)
+   %% ...
+
+   %% (where the constant concatenated to the end of each T(n) is a
+   %% single octet.)
+  <<>>.
+
+hkdf_expand_label(Secret, Label0, Context, Length) ->
+    HkdfLabel = <<?UINT16(Length),
+                  "tls13"/binary, Label0/binary, Context/binary>>,
+    hkdf_expand(Secret, HkdfLabel, Length).
+
+       %% Where HkdfLabel is specified as:
+
+       %% struct {
+       %%     uint16 length = Length;
+       %%     opaque label<7..255> = "tls13 " + Label;
+       %%     opaque context<0..255> = Context;
+       %% } HkdfLabel;
+
+derive_secret(Secret, Label, Messages, Alg) ->
+    Hash = crypto:hash(mac_algo(Alg), Messages),
+    hkdf_expand_label(Secret, Label,
+                      Hash, alg_length(Alg)).
+                            
+
 %%%% HMAC and the Pseudorandom Functions RFC 2246 & 4346 - 5.%%%%
 hmac_hash(?NULL, _, _) ->
     <<>>;
