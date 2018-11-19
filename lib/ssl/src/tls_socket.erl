@@ -175,7 +175,7 @@ emulated_options(Opts) ->
       emulated_options(Opts, internal_inet_values(), default_inet_values()).
 
 internal_inet_values() ->
-    [{packet_size,0}, {packet, 0}, {header, 0}, {active, false}, {mode,binary}].
+    [{packet_size,0}, {packet, 0}, {header, 0}, {active, ?INTERNAL_ACTIVE_N}, {mode,binary}].
 
 default_inet_values() ->
     [{packet_size, 0}, {packet,0}, {header, 0}, {active, true}, {mode, list}].

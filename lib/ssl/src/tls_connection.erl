@@ -161,12 +161,13 @@ next_record(#state{protocol_buffers =
 	    {Alert, State}
     end;
 next_record(#state{protocol_buffers = #protocol_buffers{tls_packets = [], tls_cipher_texts = []},
+                   protocol_specific = #{active_n := 0} = ProtocolSpec,
 		   socket = Socket,
                    close_tag = CloseTag,
 		   transport_cb = Transport} = State) ->
-    case tls_socket:setopts(Transport, Socket, [{active,once}]) of
+    case tls_socket:setopts(Transport, Socket, [{active, ?INTERNAL_ACTIVE_N}]) of
 	ok ->
-	    {no_record, State};
+	    {no_record, State#state{protocol_specific = ProtocolSpec#{active_n => ?INTERNAL_ACTIVE_N}}};
 	_ ->
             self() ! {CloseTag, Socket},
 	    {no_record, State}
@@ -710,7 +711,9 @@ initial_state(Role, Sender, Host, Port, Socket, {SSLOptions, SocketOptions, Trac
 	   protocol_cb = ?MODULE,
 	   tracker = Tracker,
 	   flight_buffer = [],
-           protocol_specific = #{sender => Sender}
+           protocol_specific = #{sender => Sender,
+                                 active_n => 0
+                                }
 	  }.
 
 erl_dist_data(true) ->
@@ -771,8 +774,9 @@ tls_handshake_events(Packets) ->
 
 %% raw data from socket, upack records
 handle_info({Protocol, _, Data}, StateName,
-            #state{data_tag = Protocol} = State0) ->
-    case next_tls_record(Data, StateName, State0) of
+            #state{data_tag = Protocol, 
+                   protocol_specific = #{active_n := N} = ProtoS} = State0) ->
+    case next_tls_record(Data, StateName, State0#state{protocol_specific = ProtoS#{active_n => N -1}}) of
 	{Record, State} ->
 	    next_event(StateName, Record, State);
 	#alert{} = Alert ->
