@@ -438,6 +438,33 @@ check_result(Pid, Msg) ->
 		      {got, Unexpected}},
 	    ct:fail(Reason)
     end.
+check_server_alert(Pid, Alert) ->
+    receive
+	{Pid, {error, {tls_alert, {Alert, _}}}} ->
+            ok
+    end.
+check_server_alert(Server, Client, Alert) ->
+    receive
+	{Server, {error, {tls_alert, {Alert, _}}}} ->
+	    receive
+		{Client, {error, {tls_alert, {Alert, _}}}} ->
+		    ok;
+		{Client, {error, closed}} ->
+		    ok
+	    end
+    end.
+
+check_client_alert(Server, Client, Alert) ->
+    receive
+	{Client, {error, {tls_alert, {Alert, _}}}} ->
+	    receive
+		{Server, {error, {tls_alert, {Alert, _}}}} ->
+		    ok;
+		{Server, {error, closed}} ->
+		    ok
+	    end
+    end.
+
 
 wait_for_result(Server, ServerMsg, Client, ClientMsg) -> 
     receive 
