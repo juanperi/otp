@@ -4638,7 +4638,6 @@ send_recv_result_active_no_rizzo(Socket) ->
     "Hello world" = ssl_test_lib:active_recv(Socket, 11),
     ok.
 
-
 ssl_active_recv(N) ->
     ssl_active_recv(N, []).
 
@@ -4862,7 +4861,6 @@ erlang_ssl_receive(Socket, Data) ->
         Other ->
             ct:fail({{expected, Data}, {got, Other}})
     end.
-
 receive_msg(_) ->
     receive
 	Msg ->
