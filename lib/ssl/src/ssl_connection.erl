@@ -607,7 +607,8 @@ handle_session(#server_hello{cipher_suite = CipherSuite,
 ssl_config(Opts, Role, State) ->
     ssl_config(Opts, Role, State, new).
 
-ssl_config(Opts, Role, #state{static_env = InitStatEnv0} =State0, Type) ->
+ssl_config(Opts, Role, #state{static_env = InitStatEnv0,
+                              handshake_env = HsEnv} = State0, Type) ->
     {ok, #{cert_db_ref := Ref, 
            cert_db_handle := CertDbHandle, 
            fileref_db_handle := FileRefHandle, 
@@ -634,8 +635,8 @@ ssl_config(Opts, Role, #state{static_env = InitStatEnv0} =State0, Type) ->
                          ssl_options = Opts},
     case Type of
         new ->
-            Handshake = ssl_handshake:init_handshake_history(),
-            State#state{tls_handshake_history = Handshake};
+            Hist = ssl_handshake:init_handshake_history(),
+            State#state{handshake_env = HsEnv#handshake_env{tls_handshake_history = Hist}};
         continue ->
             State
     end.
@@ -728,15 +729,15 @@ abbreviated({call, From}, Msg, State, Connection) ->
     handle_call(Msg, From, ?FUNCTION_NAME, State, Connection);
 abbreviated(internal, #finished{verify_data = Data} = Finished,
 	    #state{static_env = #static_env{role = server},
+                   handshake_env = #handshake_env{tls_handshake_history = Hist},
 		   negotiated_version = Version,
 		   expecting_finished = true,
-		   tls_handshake_history = Handshake,
 		   session = #session{master_secret = MasterSecret},
 		   connection_states = ConnectionStates0} =
 		State0, Connection) ->
     case ssl_handshake:verify_connection(ssl:tls_version(Version), Finished, client,
 					 get_current_prf(ConnectionStates0, write),
-					 MasterSecret, Handshake) of
+					 MasterSecret, Hist) of
         verified ->
 	    ConnectionStates =
 		ssl_record:set_client_verify_data(current_both, Data, ConnectionStates0),
@@ -748,13 +749,13 @@ abbreviated(internal, #finished{verify_data = Data} = Finished,
     end;
 abbreviated(internal, #finished{verify_data = Data} = Finished,
 	    #state{static_env = #static_env{role = client},
-                   tls_handshake_history = Handshake0,
+                   handshake_env = #handshake_env{tls_handshake_history = Hist0},
 		   session = #session{master_secret = MasterSecret},
 		   negotiated_version = Version,
 		   connection_states = ConnectionStates0} = State0, Connection) ->
     case ssl_handshake:verify_connection(ssl:tls_version(Version), Finished, server,
 					 get_pending_prf(ConnectionStates0, write),
-					 MasterSecret, Handshake0) of
+					 MasterSecret, Hist0) of
         verified ->
 	    ConnectionStates1 =
 		ssl_record:set_server_verify_data(current_read, Data, ConnectionStates0),
@@ -1003,18 +1004,18 @@ cipher(info, Msg, State, _) ->
 cipher(internal, #certificate_verify{signature = Signature, 
 				     hashsign_algorithm = CertHashSign},
        #state{static_env = #static_env{role = server},
+              handshake_env = #handshake_env{tls_handshake_history = Hist},
 	      key_algorithm = KexAlg,
 	      public_key_info = PublicKeyInfo,
 	      negotiated_version = Version,
-	      session = #session{master_secret = MasterSecret},
-	      tls_handshake_history = Handshake
+	      session = #session{master_secret = MasterSecret}
 	     } = State, Connection) ->
     
     TLSVersion = ssl:tls_version(Version),
     %% Use negotiated value if TLS-1.2 otherwhise return default
     HashSign = negotiated_hashsign(CertHashSign, KexAlg, PublicKeyInfo, TLSVersion),
     case ssl_handshake:certificate_verify(Signature, PublicKeyInfo,
-					  TLSVersion, HashSign, MasterSecret, Handshake) of
+					  TLSVersion, HashSign, MasterSecret, Hist) of
 	valid ->
 	    Connection:next_event(?FUNCTION_NAME, no_record,
 				  State#state{cert_hashsign_algorithm = HashSign});
@@ -1038,11 +1039,11 @@ cipher(internal, #finished{verify_data = Data} = Finished,
 	      = Session0,
               ssl_options = SslOpts,
 	      connection_states = ConnectionStates0,
-	      tls_handshake_history = Handshake0} = State, Connection) ->
+	      handshake_env = #handshake_env{tls_handshake_history = Hist}} = State, Connection) ->
     case ssl_handshake:verify_connection(ssl:tls_version(Version), Finished,
 					 opposite_role(Role),
 					 get_current_prf(ConnectionStates0, read),
-					 MasterSecret, Handshake0) of
+					 MasterSecret, Hist) of
         verified ->
 	    Session = register_session(Role, host_id(Role, Host, SslOpts), Port, Session0),
 	    cipher_role(Role, Data, Session, 
@@ -1149,7 +1150,7 @@ handle_common_event(internal, {handshake, {#hello_request{}, _}}, StateName,
   when StateName =/= connection ->
     {keep_state_and_data};
 handle_common_event(internal, {handshake, {Handshake, Raw}}, StateName,
-		    #state{tls_handshake_history = Hs0} = State0,
+		    #state{handshake_env = #handshake_env{tls_handshake_history = Hist0} = HsEnv} = State0,
 		    Connection) ->
    
     PossibleSNI = Connection:select_sni_extension(Handshake),
@@ -1157,8 +1158,9 @@ handle_common_event(internal, {handshake, {Handshake, Raw}}, StateName,
     %% a client_hello, which needs to be determined by the connection callback.
     %% In other cases this is a noop
     State = handle_sni_extension(PossibleSNI, State0),
-    HsHist = ssl_handshake:update_handshake_history(Hs0, Raw),
-    {next_state, StateName, State#state{tls_handshake_history = HsHist}, 
+
+    Hist = ssl_handshake:update_handshake_history(Hist0, Raw),
+    {next_state, StateName, State#state{handshake_env = HsEnv#handshake_env{tls_handshake_history = Hist}}, 
      [{next_event, internal, Handshake}]};
 handle_common_event(internal, {protocol_record, TLSorDTLSRecord}, StateName, State, Connection) -> 
     Connection:handle_protocol_record(TLSorDTLSRecord, StateName, State);
@@ -1406,7 +1408,7 @@ format_status(terminate, [_, StateName, State]) ->
     [{data, [{"State", {StateName, State#state{connection_states = ?SECRET_PRINTOUT,
 					       protocol_buffers =  ?SECRET_PRINTOUT,
 					       user_data_buffer = ?SECRET_PRINTOUT,
-					       tls_handshake_history =  ?SECRET_PRINTOUT,
+					       handshake_env =  ?SECRET_PRINTOUT,
 					       session =  ?SECRET_PRINTOUT,
 					       private_key =  ?SECRET_PRINTOUT,
 					       diffie_hellman_params = ?SECRET_PRINTOUT,
@@ -1562,16 +1564,16 @@ certify_client(#state{client_certificate_requested = false} = State, _) ->
     State.
 
 verify_client_cert(#state{static_env = #static_env{role = client},
+                          handshake_env = #handshake_env{tls_handshake_history = Hist},
                           client_certificate_requested = true,
 			  negotiated_version = Version,
 			  private_key = PrivateKey,
 			  session = #session{master_secret = MasterSecret,
 					     own_certificate = OwnCert},
-			  cert_hashsign_algorithm = HashSign,
-			  tls_handshake_history = Handshake0} = State, Connection) ->
+			  cert_hashsign_algorithm = HashSign} = State, Connection) ->
 
     case ssl_handshake:client_certificate_verify(OwnCert, MasterSecret,
-						 ssl:tls_version(Version), HashSign, PrivateKey, Handshake0) of
+						 ssl:tls_version(Version), HashSign, PrivateKey, Hist) of
         #certificate_verify{} = Verified ->
            Connection:queue_handshake(Verified, State);
 	ignore ->
@@ -1607,7 +1609,9 @@ server_certify_and_key_exchange(State0, Connection) ->
     request_client_cert(State2, Connection).
 
 certify_client_key_exchange(#encrypted_premaster_secret{premaster_secret= EncPMS},
-			    #state{private_key = Key, client_hello_version = {Major, Minor} = Version} = State, Connection) ->
+			    #state{private_key = Key, 
+                                   handshake_env = #handshake_env{client_hello_version = {Major, Minor} = Version}}
+                            = State, Connection) ->
     FakeSecret = make_premaster_secret(Version, rsa),
     %% Countermeasure for Bleichenbacher attack always provide some kind of premaster secret
     %% and fail handshake later.RFC 5246 section 7.4.7.1.
@@ -2034,14 +2038,15 @@ cipher_protocol(State, Connection) ->
     Connection:queue_change_cipher(#change_cipher_spec{}, State).
 
 finished(#state{static_env = #static_env{role = Role},
+                handshake_env = #handshake_env{tls_handshake_history = Hist},
                 negotiated_version = Version,
 		session = Session,
-                connection_states = ConnectionStates0,
-                tls_handshake_history = Handshake0} = State0, StateName, Connection) ->
+                connection_states = ConnectionStates0} = State0, 
+         StateName, Connection) ->
     MasterSecret = Session#session.master_secret,
     Finished = ssl_handshake:finished(ssl:tls_version(Version), Role,
 				       get_current_prf(ConnectionStates0, write),
-				       MasterSecret, Handshake0),
+				       MasterSecret, Hist),
     ConnectionStates = save_verify_data(Role, Finished, ConnectionStates0, StateName),
     Connection:send_handshake(Finished, State0#state{connection_states =
 								 ConnectionStates}).

@@ -143,9 +143,11 @@ pids(#state{protocol_specific = #{sender := Sender}}) ->
 %%====================================================================
 %% State transition handling
 %%====================================================================
-next_record(#state{unprocessed_handshake_events = N} = State) when N > 0 ->
-    {no_record, State#state{unprocessed_handshake_events = N-1}};
-					 
+next_record(#state{handshake_env = 
+                       #handshake_env{unprocessed_handshake_events = N} = HsEnv} 
+            = State) when N > 0 ->
+    {no_record, State#state{handshake_env = 
+                                HsEnv#handshake_env{unprocessed_handshake_events = N-1}}};
 next_record(#state{protocol_buffers =
 		       #protocol_buffers{tls_packets = [], tls_cipher_texts = [#ssl_tls{type = Type}| _] = CipherTexts0}
                    = Buffers,
@@ -243,8 +245,12 @@ handle_protocol_record(#ssl_tls{type = ?HANDSHAKE, fragment = Data},
                     connection ->
                         ssl_connection:hibernate_after(StateName, State, Events);
                     _ ->
+                        HsEnv = State#state.handshake_env,
                         {next_state, StateName, 
-                         State#state{unprocessed_handshake_events = unprocessed_events(Events)}, Events}
+                         State#state{protocol_buffers = Buffers,
+                                     handshake_env = 
+                                         HsEnv#handshake_env{unprocessed_handshake_events 
+                                                             = unprocessed_events(Events)}}, Events}
                 end
         end
     catch throw:#alert{} = Alert ->
@@ -279,15 +285,17 @@ handle_protocol_record(#ssl_tls{type = _Unknown}, StateName, State) ->
 renegotiation(Pid, WriteState) ->
     gen_statem:call(Pid, {user_renegotiate, WriteState}).
 
-renegotiate(#state{static_env = #static_env{role = client}} = State, Actions) ->
+renegotiate(#state{static_env = #static_env{role = client},
+                   handshake_env = HsEnv} = State, Actions) ->
     %% Handle same way as if server requested
     %% the renegotiation
     Hs0 = ssl_handshake:init_handshake_history(),
-    {next_state, connection, State#state{tls_handshake_history = Hs0}, 
+    {next_state, connection, State#state{handshake_env = HsEnv#handshake_env{tls_handshake_history = Hs0}}, 
      [{next_event, internal, #hello_request{}} | Actions]};
 renegotiate(#state{static_env = #static_env{role = server,
                                             socket = Socket,
                                             transport_cb = Transport},
+                   handshake_env = HsEnv,
 		   negotiated_version = Version,
 		   connection_states = ConnectionStates0} = State0, Actions) ->
     HelloRequest = ssl_handshake:hello_request(),
@@ -298,20 +306,20 @@ renegotiate(#state{static_env = #static_env{role = server,
     send(Transport, Socket, BinMsg),
     State = State0#state{connection_states = 
 			     ConnectionStates,
-			 tls_handshake_history = Hs0},
+			 handshake_env = HsEnv#handshake_env{tls_handshake_history = Hs0}},
     next_event(hello, no_record, State, Actions).
 	     
 send_handshake(Handshake, State) ->
     send_handshake_flight(queue_handshake(Handshake, State)).
 
 queue_handshake(Handshake, #state{negotiated_version = Version,
-				  tls_handshake_history = Hist0,
+				  handshake_env = #handshake_env{tls_handshake_history = Hist0} = HsEnv,
 				  flight_buffer = Flight0,
 				  connection_states = ConnectionStates0} = State0) ->
     {BinHandshake, ConnectionStates, Hist} =
 	encode_handshake(Handshake, Version, ConnectionStates0, Hist0),
     State0#state{connection_states = ConnectionStates,
-		 tls_handshake_history = Hist,
+                 handshake_env = HsEnv#handshake_env{tls_handshake_history = Hist},
 		 flight_buffer = Flight0 ++ [BinHandshake]}.
 
 send_handshake_flight(#state{static_env = #static_env{socket = Socket,
@@ -334,14 +342,14 @@ reinit(#state{protocol_specific = #{sender := Sender},
     tls_sender:update_connection_state(Sender, Write, Version),
     reinit_handshake_data(State).
 
-reinit_handshake_data(State) ->
+reinit_handshake_data(#state{handshake_env = HsEnv} =State) ->
     %% premaster_secret, public_key_info and tls_handshake_info 
     %% are only needed during the handshake phase. 
     %% To reduce memory foot print of a connection reinitialize them.
      State#state{
        premaster_secret = undefined,
        public_key_info = undefined,
-       tls_handshake_history = ssl_handshake:init_handshake_history()
+       handshake_env = HsEnv#handshake_env{tls_handshake_history = ssl_handshake:init_handshake_history()}
      }.
 
 select_sni_extension(#client_hello{extensions = HelloExtensions}) ->
@@ -456,6 +464,7 @@ init({call, From}, {start, Timeout},
                                      socket = Socket,
                                      session_cache = Cache,
                                      session_cache_cb = CacheCb},
+            handshake_env = HsEnv,
 	    ssl_options = SslOpts,
 	    session = #session{own_certificate = Cert} = Session0,
 	    connection_states = ConnectionStates0,
@@ -475,7 +484,7 @@ init({call, From}, {start, Timeout},
                          negotiated_version = Version, %% Requested version
                          session =
                              Session0#session{session_id = Hello#client_hello.session_id},
-                         tls_handshake_history = Handshake,
+                         handshake_env = HsEnv#handshake_env{tls_handshake_history = Handshake},
                          start_or_recv_from = From,
 			  timer = Timer},
     next_event(hello, no_record, State);
@@ -521,6 +530,7 @@ hello(internal, #client_hello{client_version = ClientVersion} = Hello,
                              port = Port,
                              session_cache = Cache,
                              session_cache_cb = CacheCb},
+             handshake_env = HSEnv,
              session = #session{own_certificate = Cert} = Session0,
 	     renegotiation = {Renegotiation, _},
 	     negotiated_protocol = CurrentProtocol,
@@ -542,7 +552,7 @@ hello(internal, #client_hello{client_version = ClientVersion} = Hello,
                           State#state{connection_states  = ConnectionStates,
                                       negotiated_version = Version,
                                       hashsign_algorithm = HashSign,
-                                      client_hello_version = ClientVersion,
+                                      handshake_env = HSEnv#handshake_env{client_hello_version = ClientVersion},
                                       session = Session,
                                       negotiated_protocol = Protocol})
     end;
@@ -755,6 +765,7 @@ initial_state(Role, Sender, Host, Port, Socket, {SSLOptions, SocketOptions, Trac
                     },
     #state{
        static_env = InitStatEnv,
+       handshake_env = #handshake_env{tls_handshake_history = ssl_handshake:init_handshake_history()},
        socket_options = SocketOptions,
        ssl_options = SSLOptions,
        session = #session{is_resumable = new},
