@@ -423,10 +423,10 @@ init({call, From}, {start, Timeout},
                                      role = client,
                                      session_cache = Cache,
                                      session_cache_cb = CacheCb},
+            handshake_env = #handshake_env{renegotiation = {Renegotiation, _}},
 	    ssl_options = SslOpts,
 	    session = #session{own_certificate = Cert} = Session0,
-	    connection_states = ConnectionStates0,
-	    renegotiation = {Renegotiation, _}
+	    connection_states = ConnectionStates0
 	   } = State0) ->
     Timer = ssl_connection:start_or_recv_cancel_timer(Timeout, From),
     Hello = dtls_handshake:client_hello(Host, Port, ConnectionStates0, SslOpts,
@@ -517,12 +517,11 @@ hello(internal, #hello_verify_request{cookie = Cookie}, #state{static_env = #sta
                                                                                         port = Port,
                                                                                         session_cache = Cache,
                                                                                         session_cache_cb = CacheCb},
-                                                               handshake_env = HsEnv,
+                                                               handshake_env = #handshake_env{renegotiation = {Renegotiation, _}} = HsEnv,
 							       ssl_options = SslOpts,
 							       session = #session{own_certificate = OwnCert} 
 							       = Session0,
-							       connection_states = ConnectionStates0,
-                                                               renegotiation = {Renegotiation, _}
+							       connection_states = ConnectionStates0
 							      } = State0) ->
   
     Hello = dtls_handshake:client_hello(Host, Port, Cookie, ConnectionStates0,
@@ -574,9 +573,9 @@ hello(internal, #client_hello{cookie = Cookie} = Hello, #state{static_env = #sta
 hello(internal, #server_hello{} = Hello,
       #state{
          static_env = #static_env{role = client},
+         handshake_env = #handshake_env{renegotiation = {Renegotiation, _}},
          connection_states = ConnectionStates0,
          negotiated_version = ReqVersion,
-         renegotiation = {Renegotiation, _},
          ssl_options = SslOptions} = State) ->
     case dtls_handshake:hello(Hello, SslOptions, ConnectionStates0, Renegotiation) of
 	#alert{} = Alert ->
@@ -690,11 +689,12 @@ connection(internal, #hello_request{}, #state{static_env = #static_env{host = Ho
                                                                        session_cache = Cache,
                                                                        session_cache_cb = CacheCb
                                                                       },
+                                              handshake_env = #handshake_env{ renegotiation = {Renegotiation, _}},
                                               session = #session{own_certificate = Cert} = Session0,
 
                                               ssl_options = SslOpts,
-                                              connection_states = ConnectionStates0,
-                                              renegotiation = {Renegotiation, _}} = State0) ->
+                                              connection_states = ConnectionStates0
+                                             } = State0) ->
     
     Hello = dtls_handshake:client_hello(Host, Port, ConnectionStates0, SslOpts,
 					Cache, CacheCb, Renegotiation, Cert),
@@ -716,7 +716,8 @@ connection(internal, #client_hello{} = Hello, #state{static_env = #static_env{ro
     %% initiated renegotiation we will disallow many client initiated
     %% renegotiations immediately after each other.
     erlang:send_after(?WAIT_TO_ALLOW_RENEGOTIATION, self(), allow_renegotiate),
-    {next_state, hello, State#state{allow_renegotiate = false, renegotiation = {true, peer}},
+    {next_state, hello, State#state{allow_renegotiate = false, 
+                                    handshake_env = #handshake_env{renegotiation = {true, peer}}},
      [{next_event, internal, Hello}]};
 connection(internal, #client_hello{}, #state{static_env = #static_env{role = server},
                                              allow_renegotiate = false} = State0) ->
@@ -788,7 +789,10 @@ initial_state(Role, Host, Port, Socket, {SSLOptions, SocketOptions, _}, User,
                     },
 
     #state{static_env = InitStatEnv,
-           handshake_env = #handshake_env{tls_handshake_history = ssl_handshake:init_handshake_history()},
+           handshake_env = #handshake_env{
+                              tls_handshake_history = ssl_handshake:init_handshake_history(),
+                              renegotiation = {false, first}
+                             },
            socket_options = SocketOptions,
 	   %% We do not want to save the password in the state so that
 	   %% could be written in the clear into error logs.
@@ -798,7 +802,6 @@ initial_state(Role, Host, Port, Socket, {SSLOptions, SocketOptions, _}, User,
 	   protocol_buffers = #protocol_buffers{},
 	   user_application = {Monitor, User},
 	   user_data_buffer = <<>>,
-	   renegotiation = {false, first},
 	   allow_renegotiate = SSLOptions#ssl_options.client_renegotiation,
 	   start_or_recv_from = undefined,
 	   flight_buffer = new_flight(),
@@ -851,10 +854,8 @@ handle_client_hello(#client_hello{client_version = ClientVersion} = Hello,
                            static_env = #static_env{port = Port,
                                                      session_cache = Cache,
                                                     session_cache_cb = CacheCb},
-                           handshake_env = HsEnv,
+                           handshake_env = #handshake_env{renegotiation = {Renegotiation, _}} = HsEnv,
 			   session = #session{own_certificate = Cert} = Session0,
-			   renegotiation = {Renegotiation, _},
-
 			   negotiated_protocol = CurrentProtocol,
 			   key_algorithm = KeyExAlg,
 			   ssl_options = SslOpts} = State0) ->
@@ -1162,13 +1163,14 @@ send_application_data(Data, From, _StateName,
                       #state{static_env = #static_env{socket = Socket,
                                                       protocol_cb = Connection,
                                                       transport_cb = Transport},
+                             handshake_env = HsEnv,
                              negotiated_version = Version,
                              connection_states = ConnectionStates0,
                              ssl_options = #ssl_options{renegotiate_at = RenegotiateAt}} = State0) ->
        
     case time_to_renegotiate(Data, ConnectionStates0, RenegotiateAt) of
 	true ->
-	    renegotiate(State0#state{renegotiation = {true, internal}}, 
+	    renegotiate(State0#state{handshake_env = HsEnv#handshake_env{renegotiation = {true, internal}}}, 
                         [{next_event, {call, From}, {application_data, Data}}]);
 	false ->
 	    {Msgs, ConnectionStates} =

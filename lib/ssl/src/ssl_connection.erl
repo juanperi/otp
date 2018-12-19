@@ -356,8 +356,8 @@ handle_normal_shutdown(Alert, _, #state{static_env = #static_env{role = Role,
                                                                  transport_cb = Transport,
                                                                  protocol_cb = Connection,
                                                                  tracker = Tracker},
-					start_or_recv_from = StartFrom,
-                                        renegotiation = {false, first}} = State) ->
+                                        handshake_env = #handshake_env{renegotiation = {false, first}},
+					start_or_recv_from = StartFrom} = State) ->
     Pids = Connection:pids(State),
     alert_user(Pids, Transport, Tracker,Socket, StartFrom, Alert, Role, Connection);
 
@@ -401,8 +401,8 @@ handle_alert(#alert{level = ?WARNING, description = ?CLOSE_NOTIFY} = Alert,
 handle_alert(#alert{level = ?WARNING, description = ?NO_RENEGOTIATION} = Alert, StateName, 
 	     #state{static_env = #static_env{role = Role,
                                              protocol_cb = Connection},
-                    ssl_options = SslOpts,
-                    renegotiation = {true, internal}} = State) ->
+                    handshake_env = #handshake_env{renegotiation = {true, internal}},
+                    ssl_options = SslOpts} = State) ->
     log_alert(SslOpts#ssl_options.log_alert, Role, 
               Connection:protocol_name(), StateName, Alert#alert{role = opposite_role(Role)}),
     handle_normal_shutdown(Alert, StateName, State),
@@ -411,26 +411,26 @@ handle_alert(#alert{level = ?WARNING, description = ?NO_RENEGOTIATION} = Alert, 
 handle_alert(#alert{level = ?WARNING, description = ?NO_RENEGOTIATION} = Alert, connection = StateName, 
 	     #state{static_env = #static_env{role = Role,
                                              protocol_cb = Connection},
-                    ssl_options = SslOpts,
-                    renegotiation = {true, From}
+                    handshake_env = #handshake_env{renegotiation = {true, From}} = HsEnv,
+                    ssl_options = SslOpts                 
 		   } = State0) ->
     log_alert(SslOpts#ssl_options.log_alert,  Role,
               Connection:protocol_name(), StateName, Alert#alert{role = opposite_role(Role)}),
     gen_statem:reply(From, {error, renegotiation_rejected}),
     State = Connection:reinit_handshake_data(State0),
-    Connection:next_event(connection, no_record, State#state{renegotiation = undefined});
+    Connection:next_event(connection, no_record, State#state{handshake_env = HsEnv#handshake_env{renegotiation = undefined}});
 
 handle_alert(#alert{level = ?WARNING, description = ?NO_RENEGOTIATION} = Alert, StateName, 
 	     #state{static_env = #static_env{role = Role,
                                              protocol_cb = Connection},
-                    ssl_options = SslOpts,
-                    renegotiation = {true, From}
+                    handshake_env = #handshake_env{renegotiation = {true, From}} = HsEnv,
+                    ssl_options = SslOpts
 		  } = State0) ->
     log_alert(SslOpts#ssl_options.log_alert,  Role,
               Connection:protocol_name(), StateName, Alert#alert{role = opposite_role(Role)}),
     gen_statem:reply(From, {error, renegotiation_rejected}),
     %% Go back to connection!
-    State = Connection:reinit(State0#state{renegotiation = undefined}),
+    State = Connection:reinit(State0#state{handshake_env = HsEnv#handshake_env{renegotiation = undefined}}),
     Connection:next_event(connection, no_record, State);
 
 %% Gracefully log and ignore all other warning alerts
@@ -1085,9 +1085,10 @@ connection({call, RecvFrom}, {recv, N, Timeout},
                                  start_or_recv_from = RecvFrom, 
                                  timer = Timer}, ?FUNCTION_NAME, Connection);
 
-connection({call, From}, renegotiate, #state{static_env = #static_env{protocol_cb = Connection}} = State,
+connection({call, From}, renegotiate, #state{static_env = #static_env{protocol_cb = Connection},
+                                             handshake_env = HsEnv} = State,
 	   Connection) ->
-    Connection:renegotiate(State#state{renegotiation = {true, From}}, []);
+    Connection:renegotiate(State#state{handshake_env = HsEnv#handshake_env{renegotiation = {true, From}}}, []);
 connection({call, From}, peer_certificate, 
 	   #state{session = #session{peer_certificate = Cert}} = State, _) ->
     hibernate_after(?FUNCTION_NAME, State, [{reply, From,  {ok, Cert}}]); 
@@ -1107,9 +1108,10 @@ connection({call, From}, negotiated_protocol,
 connection({call, From}, Msg, State, Connection) ->
     handle_call(Msg, From, ?FUNCTION_NAME, State, Connection);
 connection(cast, {internal_renegotiate, WriteState}, #state{static_env = #static_env{protocol_cb = Connection},
+                                                            handshake_env = HsEnv,
                                                             connection_states = ConnectionStates} 
            = State, Connection) -> 
-    Connection:renegotiate(State#state{renegotiation = {true, internal},
+    Connection:renegotiate(State#state{handshake_env = HsEnv#handshake_env{renegotiation = {true, internal}},
                                        connection_states = ConnectionStates#{current_write => WriteState}}, []);
 connection(cast, {dist_handshake_complete, DHandle},
            #state{ssl_options = #ssl_options{erl_dist = true},
@@ -1142,9 +1144,11 @@ downgrade(Type, Event, State, Connection) ->
 %% common or unexpected events for the state.
 %%--------------------------------------------------------------------
 handle_common_event(internal, {handshake, {#hello_request{} = Handshake, _}}, connection = StateName,  
-		    #state{static_env = #static_env{role = client}} = State, _) ->
+		    #state{static_env = #static_env{role = client}, 
+                           handshake_env = HsEnv} = State, _) ->
     %% Should not be included in handshake history
-    {next_state, StateName, State#state{renegotiation = {true, peer}}, [{next_event, internal, Handshake}]};
+    {next_state, StateName, State#state{handshake_env = HsEnv#handshake_env{renegotiation = {true, peer}}},
+     [{next_event, internal, Handshake}]};
 handle_common_event(internal, {handshake, {#hello_request{}, _}}, StateName,
                     #state{static_env = #static_env{role = client}}, _)
   when StateName =/= connection ->
@@ -1323,7 +1327,7 @@ handle_info(allow_renegotiate, StateName, State) ->
     {next_state, StateName, State#state{allow_renegotiate = true}};
 
 handle_info({cancel_start_or_recv, StartFrom}, StateName,
-	    #state{renegotiation = {false, first}} = State) when StateName =/= connection ->
+	    #state{handshake_env = #handshake_env{renegotiation = {false, first}}} = State) when StateName =/= connection ->
     {stop_and_reply,
      {shutdown, user_timeout},
      {reply, StartFrom, {error, timeout}},
@@ -2374,7 +2378,7 @@ handle_trusted_certs_db(#state{static_env = #static_env{cert_db_ref = Ref,
 	    ok
     end.
 
-prepare_connection(#state{renegotiation = Renegotiate, 
+prepare_connection(#state{handshake_env = #handshake_env{renegotiation = Renegotiate}, 
 			  start_or_recv_from = RecvFrom} = State0, Connection) 
   when Renegotiate =/= {false, first}, 
        RecvFrom =/= undefined ->
@@ -2384,18 +2388,18 @@ prepare_connection(State0, Connection) ->
     State = Connection:reinit(State0),
     {no_record, ack_connection(State)}.
 
-ack_connection(#state{renegotiation = {true, Initiater}} = State) when Initiater == peer;
-                                                                       Initiater == internal ->
-    State#state{renegotiation = undefined};
-ack_connection(#state{renegotiation = {true, From}} = State) ->    
+ack_connection(#state{handshake_env = #handshake_env{renegotiation = {true, Initiater}} = HsEnv} = State) when Initiater == peer;
+                                                                                                               Initiater == internal ->
+    State#state{handshake_env = HsEnv#handshake_env{renegotiation = undefined}};
+ack_connection(#state{handshake_env = #handshake_env{renegotiation = {true, From}} = HsEnv} = State) ->    
     gen_statem:reply(From, ok),
-    State#state{renegotiation = undefined};
-ack_connection(#state{renegotiation = {false, first}, 
+    State#state{handshake_env = HsEnv#handshake_env{renegotiation = undefined}};
+ack_connection(#state{handshake_env = #handshake_env{renegotiation = {false, first}} = HsEnv, 
 		      start_or_recv_from = StartFrom,
 		      timer = Timer} = State) when StartFrom =/= undefined ->
     gen_statem:reply(StartFrom, connected),
     cancel_timer(Timer),
-    State#state{renegotiation = undefined, 
+    State#state{handshake_env = HsEnv#handshake_env{renegotiation = undefined}, 
 		start_or_recv_from = undefined, timer = undefined};
 ack_connection(State) ->
     State.
