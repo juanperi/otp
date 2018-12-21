@@ -716,6 +716,8 @@ connection({call, From}, {application_data, Data}, State) ->
     catch throw:Error ->
             ssl_connection:hibernate_after(?FUNCTION_NAME, State, [{reply, From, Error}])
     end;
+connection(state_timeout, Event, State) ->
+    handle_state_timeout(Event, ?FUNCTION_NAME, State);
 connection(Type, Event, State) ->
      ssl_connection:?FUNCTION_NAME(Type, Event, State, ?MODULE).
 
