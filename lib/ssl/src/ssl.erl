@@ -76,7 +76,6 @@
               hello_extensions/0,
               error_alert/0,
               session_id/0, 
-              path/0, 
               hostname/0,
               host/0,
               prf/0, 
@@ -94,15 +93,14 @@
 -type socket_option()    ::  socket_connect_option() | socket_listen_option(). 
 -type socket_connect_option()    :: gen_tcp:connect_option() | gen_udp:option().
 -type socket_listen_option()     :: gen_tcp:listen_option() | gen_udp:option().
--opaque sslsocket()              :: #sslsocket{}.
+-type sslsocket()              :: {sslsocket, any(), any()}.
 -type tls_option()                :: tls_client_option() | tls_server_option().
--type tls_client_option()            :: client_option() | socket_connect_option() |  transport_option().
--type tls_server_option()            :: server_option() | socket_listen_option() | transport_option().
+-type tls_client_option()            :: client_option() | common_option() | socket_connect_option() |  transport_option().
+-type tls_server_option()            :: server_option() | common_option() | socket_listen_option() | transport_option().
 -type active_msgs()  :: {ssl, sslsocket(), Data::binary() | list()} | {ssl_closed, sslsocket()} |
                         {ssl_error, sslsocket(), Reason::term()}.
 -type transport_option() :: {cb_info, {CallbackModule::atom(), DataTag::atom(),
 				       ClosedTag::atom(), ErrTag::atom()}}.
--type path()         :: file:filename().
 -type host()         :: hostname() | ip_address().
 -type hostname()     :: string().
 -type ip_address()   :: inet:ip_address().
@@ -244,14 +242,14 @@
 -type protocol()                 :: tls | dtls.
 -type handshake_completion()     ::  hello | full.
 -type cert()                     :: public_key:der_encoded().
--type cert_pem()                 :: ssl:path().
+-type cert_pem()                 :: file:filename().
 -type key()                      :: {'RSAPrivateKey'| 'DSAPrivateKey' | 'ECPrivateKey' |'PrivateKeyInfo', 
                                            public_key:der_encoded()} | 
                                      #{algorithm := rsa | dss | ecdsa, 
                                        engine := crypto:engine_ref(), 
                                        key_id := crypto:key_id(), 
                                        password => crypto:password()}.
--type key_pem()                  :: ssl:path().
+-type key_pem()                  :: file:filename().
 -type key_password()                 :: string().
 -type cipher_suites() :: ciphers().    
 -type ciphers()      :: [erl_cipher_suite()] |
@@ -294,10 +292,10 @@
                                 {fallback, fallback()}.
 
 -type client_verify_type()       :: verify_type().
--type client_reuse_session()     :: ssl:session_id().
+-type client_reuse_session()     :: session_id().
 -type client_reuse_sessions()    :: boolean() | save.
 -type client_cacerts()           :: [public_key:der_encoded()].
--type client_cafile()            :: ssl:path().
+-type client_cafile()            :: file:filename().
 -type app_level_protocol()       :: binary().
 -type client_alpn()              :: [app_level_protocol()].
 -type client_preferred_next_protocols() :: {Precedence :: server | client, 
@@ -308,7 +306,7 @@
 -type client_psk_identity()             :: psk_identity().
 -type client_srp_identity()             :: srp_identity().
 -type customize_hostname_check() :: list().
--type sni()                      :: HostName :: ssl:hostname() | disable. 
+-type sni()                      :: HostName :: hostname() | disable. 
 -type client_signature_algs()    :: signature_algs().
 -type fallback()                 :: boolean().
 
@@ -334,18 +332,18 @@
                                 {signature_algs, server_signature_algs()}.
 
 -type server_cacerts()           :: [public_key:der_encoded()].
--type server_cafile()            :: ssl:path().
+-type server_cafile()            :: file:filename().
 -type server_alpn()              :: [app_level_protocol()].
 -type server_next_protocol()     :: [app_level_protocol()].
 -type server_psk_identity()      :: psk_identity().
 -type dh_der()                   :: binary().
--type dh_file()                  :: ssl:path().
+-type dh_file()                  :: file:filename().
 -type server_verify_type()       :: verify_type().
 -type fail_if_no_peer_cert()     :: boolean().
 -type server_signature_algs()    :: signature_algs().
 -type server_reuse_session()     :: fun().
 -type server_reuse_sessions()    :: boolean().
--type sni_hosts()                :: [{ssl:hostname(), [server_option() | common_option()]}].
+-type sni_hosts()                :: [{hostname(), [server_option() | common_option()]}].
 -type sni_fun()                  :: fun().
 -type honor_cipher_order()       :: boolean().
 -type honor_ecc_order()          :: boolean().

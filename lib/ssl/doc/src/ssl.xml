@@ -119,11 +119,7 @@
 	</p>
       </desc>
     </datatype>
-   
-      <datatype>
-      <name name="path"/>
-     </datatype>
-
+  
      <datatype>
       <name name="host"/>
      </datatype>
