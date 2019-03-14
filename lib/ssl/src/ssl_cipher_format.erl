@@ -792,6 +792,52 @@ suite_definition(?TLS_ECDH_RSA_WITH_AES_256_GCM_SHA384) ->
       cipher => aes_256_gcm, 
       mac => aead, 
       prf => sha384};
+suite_definition(?TLS_PSK_WITH_AES_128_CCM) ->
+    #{key_exchange => psk,
+      cipher => aes_128_ccm,
+      mac => aead,
+      prf => sha256};
+suite_definition(?TLS_PSK_WITH_AES_256_CCM) -> 
+    #{key_exchange => psk,
+      cipher => aes_256_ccm,
+      mac => aead,
+      prf => sha256};
+suite_definition(?TLS_DHE_PSK_WITH_AES_128_CCM) ->
+    #{key_exchange => psk_dhe,
+      cipher => aes_128_ccm,
+      mac => aead,
+      prf => sha256};
+suite_definition(?TLS_DHE_PSK_WITH_AES_256_CCM) ->
+    #{key_exchange => psk_dhe,
+      cipher => aes_128_ccm,
+      mac => aead,
+      prf => sha256};
+suite_definition(?TLS_PSK_WITH_AES_128_CCM_8) ->
+    #{key_exchange => psk,
+      cipher => aes_128_ccm_8,
+      mac => aead,
+      prf => sha256};
+suite_definition(?TLS_PSK_WITH_AES_256_CCM_8) ->
+    #{key_exchange => psk,
+      cipher => aes_256_ccm_8,
+      mac => aead,
+      prf => sha256};
+suite_definition(?TLS_PSK_DHE_WITH_AES_128_CCM_8) ->
+  #{key_exchange => psk_dhe,
+    cipher => aes_128_ccm_8,
+    mac => aead,
+    prf => sha256};
+suite_definition(?TLS_PSK_DHE_WITH_AES_256_CCM_8) ->
+  #{key_exchange => psk_dhe,
+    cipher => aes_256_ccm_8,
+    mac => aead,
+    prf => sha256};
+suite_definition(#{key_exchange := psk_dhe,
+                   cipher := aes_256_ccm_8,
+                   mac := aead,
+                   prf := sha256}) ->
+    ?TLS_PSK_DHE_WITH_AES_256_CCM_8;
+
 %% draft-agl-tls-chacha20poly1305-04 Chacha20/Poly1305 Suites
 suite_definition(?TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256) ->
     #{key_exchange => ecdhe_rsa, 
@@ -1460,6 +1506,50 @@ suite(#{key_exchange := dhe_rsa,
         mac := aead, 
         prf := sha256}) ->
     ?TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256;
+
+%% RFC 6655 - TLS-1.2 cipher suites
+
+suite(#{key_exchange := psk,
+        cipher := aes_128_ccm,
+        mac := aead,
+        prf := sha256}) ->
+    ?TLS_PSK_WITH_AES_128_CCM;
+suite(#{key_exchange := psk,
+        cipher := aes_256_ccm,
+        mac := aead,
+        prf := sha256}) ->
+    ?TLS_PSK_WITH_AES_256_CCM;
+suite(#{key_exchange := psk_dhe,
+        cipher := aes_128_ccm,
+        mac := aead,
+        prf := sha256}) ->
+    ?TLS_DHE_PSK_WITH_AES_128_CCM;
+suite(#{key_exchange := psk_dhe,
+        cipher := aes_256_ccm,
+        mac := aead,
+        prf := sha256}) ->
+    ?TLS_DHE_PSK_WITH_AES_256_CCM;
+suite(#{key_exchange := psk,
+        cipher := aes_128_ccm_8,
+        mac := aead,
+        prf := sha256}) ->
+    ?TLS_PSK_WITH_AES_128_CCM_8;
+suite(#{key_exchange := psk,
+        cipher := aes_256_ccm_8,
+        mac := aead,
+        prf := sha256}) ->
+    ?TLS_PSK_WITH_AES_256_CCM_8;
+suite(#{key_exchange := psk_dhe,
+        cipher := aes_128_ccm_8,
+        mac := aead,
+        prf := sha256}) ->
+    ?TLS_PSK_DHE_WITH_AES_128_CCM_8;
+suite(#{key_exchange := psk_dhe,
+        cipher := aes_256_ccm_8,
+        mac := aead,
+        prf := sha256}) ->
+    ?TLS_PSK_DHE_WITH_AES_256_CCM_8;
+
 %% TLS 1.3 Cipher Suites RFC8446
 suite(#{key_exchange := any,
         cipher := aes_128_gcm,

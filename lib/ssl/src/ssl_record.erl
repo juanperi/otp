@@ -498,7 +498,9 @@ aead_ciphertext_split(?CHACHA20_POLY1305, #cipher_state{tag_len = Len}, CipherTe
     CipherLen = byte_size(CipherTextFragment) - Len,
     <<CipherText:CipherLen/bytes, CipherTag:Len/bytes>> = CipherTextFragment,
     {?end_additional_data(AAD, CipherLen), CipherText, CipherTag};
-aead_ciphertext_split(?AES_GCM,  #cipher_state{tag_len = Len}, CipherTextFragment, AAD) ->
+aead_ciphertext_split(Type,  #cipher_state{tag_len = Len}, CipherTextFragment, AAD) when Type == ?AES_GCM;
+                                                                                         Type == ?AES_CCM;
+                                                                                         Type == ?AES_CCM_8->
     CipherLen = byte_size(CipherTextFragment) - (Len + 8), %% 8 is length of explicit Nonce
     << _:8/bytes, CipherText:CipherLen/bytes, CipherTag:Len/bytes>> = CipherTextFragment,
     {?end_additional_data(AAD, CipherLen), CipherText, CipherTag}.

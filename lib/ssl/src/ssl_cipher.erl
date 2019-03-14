@@ -106,9 +106,13 @@ security_parameters_1_3(SecParams, CipherSuite) ->
 cipher_init(?RC4, IV, Key) ->
     State = crypto:stream_init(rc4, Key),
     #cipher_state{iv = IV, key = Key, state = State};
-cipher_init(?AES_GCM, IV, Key) ->
+cipher_init(Type, IV, Key) when Type == ?AES_GCM;
+                                Type == ?AES_CCM ->
     <<Nonce:64>> = random_bytes(8),
     #cipher_state{iv = IV, key = Key, nonce = Nonce, tag_len = 16};
+cipher_init(?AES_CCM_8, IV, Key) ->
+    <<Nonce:64>> = random_bytes(8),
+    #cipher_state{iv = IV, key = Key, nonce = Nonce, tag_len = 8};
 cipher_init(?CHACHA20_POLY1305, IV, Key) ->
     #cipher_state{iv = IV, key = Key, tag_len = 16};
 cipher_init(_BCA, IV, Key) ->
@@ -156,6 +160,10 @@ aead_decrypt(Type, Key, Nonce, CipherText, CipherTag, AdditionalData) ->
 
 aead_type(?AES_GCM) ->
     aes_gcm;
+aead_type(?AES_CCM) ->
+    aes_ccm;
+aead_type(?AES_CCM_8) ->
+    aes_ccm;
 aead_type(?CHACHA20_POLY1305) ->
     chacha20_poly1305.
 
@@ -311,8 +319,7 @@ anonymous_suites({254, _} = Version) ->
     dtls_v1:anonymous_suites(Version);
 anonymous_suites(4) ->
     []; %% Raw public key negotiation may be used instead
-anonymous_suites(N)
-  when N >= 3 ->
+anonymous_suites( 3 = N) ->
     psk_suites_anon(N) ++
     [?TLS_DH_anon_WITH_AES_128_GCM_SHA256,
      ?TLS_DH_anon_WITH_AES_256_GCM_SHA384,
@@ -347,8 +354,7 @@ psk_suites({3, N}) ->
     psk_suites(N);
 psk_suites(4) ->
     []; %% TODO Add new PSK, PSK_(EC)DHE suites
-psk_suites(N)
-  when N >= 3 ->
+psk_suites(3) ->
     [
      ?TLS_RSA_PSK_WITH_AES_256_GCM_SHA384,
      ?TLS_RSA_PSK_WITH_AES_256_CBC_SHA384,
@@ -369,20 +375,27 @@ psk_suites(_) ->
 %%--------------------------------------------------------------------
 psk_suites_anon({3, N}) ->
     psk_suites_anon(N);
-psk_suites_anon(N)
-  when N >= 3 ->
+psk_suites_anon(3) ->
     [
      ?TLS_DHE_PSK_WITH_AES_256_GCM_SHA384,
      ?TLS_PSK_WITH_AES_256_GCM_SHA384,
      ?TLS_ECDHE_PSK_WITH_AES_256_CBC_SHA384,
      ?TLS_DHE_PSK_WITH_AES_256_CBC_SHA384,
      ?TLS_PSK_WITH_AES_256_CBC_SHA384,
+     ?TLS_DHE_PSK_WITH_AES_256_CCM,
+     ?TLS_PSK_DHE_WITH_AES_256_CCM_8,
+     ?TLS_PSK_WITH_AES_256_CCM,
+     ?TLS_PSK_WITH_AES_256_CCM_8,
      ?TLS_ECDHE_PSK_WITH_AES_128_GCM_SHA256,
      ?TLS_DHE_PSK_WITH_AES_128_GCM_SHA256,
      ?TLS_PSK_WITH_AES_128_GCM_SHA256,
      ?TLS_ECDHE_PSK_WITH_AES_128_CBC_SHA256,
      ?TLS_DHE_PSK_WITH_AES_128_CBC_SHA256,
-     ?TLS_PSK_WITH_AES_128_CBC_SHA256
+     ?TLS_PSK_WITH_AES_128_CBC_SHA256,
+     ?TLS_DHE_PSK_WITH_AES_128_CCM,
+     ?TLS_PSK_DHE_WITH_AES_128_CCM_8,
+     ?TLS_PSK_WITH_AES_128_CCM,
+     ?TLS_PSK_WITH_AES_128_CCM_8
     ] ++ psk_suites_anon(0);
 psk_suites_anon(_) ->
 	[?TLS_DHE_PSK_WITH_AES_256_CBC_SHA,
@@ -721,6 +734,12 @@ bulk_cipher_algorithm(Cipher) when Cipher == aes_128_cbc;
 bulk_cipher_algorithm(Cipher) when Cipher == aes_128_gcm;
 				   Cipher == aes_256_gcm ->
     ?AES_GCM;
+bulk_cipher_algorithm(Cipher) when Cipher == aes_128_ccm;
+				   Cipher == aes_256_ccm ->
+    ?AES_CCM;
+bulk_cipher_algorithm(Cipher) when Cipher == aes_128_ccm_8;
+				   Cipher == aes_256_ccm_8 ->
+    ?AES_CCM_8;
 bulk_cipher_algorithm(chacha20_poly1305) ->
     ?CHACHA20_POLY1305.
 
@@ -735,6 +754,8 @@ type(Cipher) when Cipher == des_cbc;
     ?BLOCK;
 type(Cipher) when Cipher == aes_128_gcm;
 		  Cipher == aes_256_gcm;
+                  Cipher == aes_128_ccm;
+		  Cipher == aes_256_ccm;
 		  Cipher == chacha20_poly1305 ->
     ?AEAD.
 
@@ -752,7 +773,11 @@ key_material(aes_256_cbc) ->
     32;
 key_material(aes_128_gcm) ->
     16;
+key_material(aes_128_ccm) ->
+    16;
 key_material(aes_256_gcm) ->
+    32;
+key_material(aes_256_ccm) ->
     32;
 key_material(chacha20_poly1305) ->
     32.
@@ -769,6 +794,8 @@ expanded_key_material(Cipher) when Cipher == aes_128_cbc;
 				   Cipher == aes_256_cbc;
 				   Cipher == aes_128_gcm;
 				   Cipher == aes_256_gcm;
+                                   Cipher == aes_128_ccm;
+				   Cipher == aes_256_ccm;
 				   Cipher == chacha20_poly1305 ->
     unknown.  
 
@@ -778,12 +805,15 @@ effective_key_bits(des_cbc) ->
     56;
 effective_key_bits(Cipher) when Cipher == rc4_128;
 				Cipher == aes_128_cbc;
-				Cipher == aes_128_gcm ->
+				Cipher == aes_128_gcm;
+                                Cipher == aes_128_ccm
+                                ->
     128;
 effective_key_bits('3des_ede_cbc') ->
     168;
 effective_key_bits(Cipher) when Cipher == aes_256_cbc;
 				Cipher == aes_256_gcm;
+				Cipher == aes_256_ccm;
 				Cipher == chacha20_poly1305 ->
     256.
 
@@ -792,7 +822,10 @@ iv_size(Cipher) when Cipher == null;
 		     Cipher == chacha20_poly1305->
     0;
 iv_size(Cipher) when Cipher == aes_128_gcm;
-		     Cipher == aes_256_gcm ->
+		     Cipher == aes_256_gcm;
+                     Cipher == aes_128_ccm;
+		     Cipher == aes_256_ccm
+                     ->
     4;
 iv_size(Cipher) ->
     block_size(Cipher).
@@ -804,6 +837,8 @@ block_size(Cipher) when Cipher == aes_128_cbc;
 			Cipher == aes_256_cbc;
 			Cipher == aes_128_gcm;
 			Cipher == aes_256_gcm;
+                        Cipher == aes_128_ccm;
+			Cipher == aes_256_ccm;
 			Cipher == chacha20_poly1305 ->
     16.
 
