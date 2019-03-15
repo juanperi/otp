@@ -160,6 +160,7 @@ api_tests() ->
      hibernate_right_away,
      listen_socket,
      ssl_recv_timeout,
+     ssl_recv_timeout_empty_buffer,
      server_name_indication_option,
      accept_pool,
      prf,
@@ -3884,7 +3885,7 @@ tls_ssl_accept_timeout(Config) ->
 
 %%--------------------------------------------------------------------
 ssl_recv_timeout() ->
-    [{doc,"Test ssl:ssl_accept timeout"}].
+    [{doc,"Test ssl:recv timeout"}].
 
 ssl_recv_timeout(Config) ->
     ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
@@ -3909,6 +3910,36 @@ ssl_recv_timeout(Config) ->
     ssl_test_lib:check_result(Client, ok, Server, ok),
     ssl_test_lib:close(Server),
     ssl_test_lib:close(Client).
+
+
+%%--------------------------------------------------------------------
+ssl_recv_timeout_empty_buffer() ->
+    [{doc,"Test ssl:recv timeout with empty buffer when recv is called ERL-883 ERL-884"}].
+
+ssl_recv_timeout_empty_buffer(Config) ->
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+
+    {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
+
+    Server =
+	ssl_test_lib:start_server([{node, ServerNode}, {port, 0},
+				   {from, self()},
+				   {mfa, {?MODULE, send_recv_result_timeout_empty_buffer_server, []}},
+				   {options, [{active, false} | ServerOpts]}]),
+    Port = ssl_test_lib:inet_port(Server),
+
+    Client = ssl_test_lib:start_client([{node, ClientNode}, {port, Port},
+					{host, Hostname},
+					{from, self()},
+					{mfa, {?MODULE,
+					       send_recv_result_timeout_empty_buffer_client, []}},
+					{options, [{active, false} | ClientOpts]}]),
+
+    ssl_test_lib:check_result(Client, ok, Server, ok),
+    ssl_test_lib:close(Server),
+    ssl_test_lib:close(Client).
+
 
 %%--------------------------------------------------------------------
 connect_twice() ->
@@ -4707,6 +4738,16 @@ send_recv_result_timeout_server(Socket) ->
     {ok, "Hello world"} = ssl:recv(Socket, 11),
     ssl:send(Socket, " world"),
     ok.
+
+send_recv_result_timeout_empty_buffer_server(Socket) ->
+    ct:sleep(2000), 
+    ssl:send(Socket, "Hello world"),
+    ok.
+
+send_recv_result_timeout_empty_buffer_client(Socket) ->
+    {ok, "Hello world"} = ssl:recv(Socket, 0, 10000),
+    ok.
+
 
 recv_close(Socket) ->
     {error, closed} = ssl:recv(Socket, 11),
