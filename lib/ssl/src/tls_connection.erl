@@ -224,6 +224,10 @@ next_event(StateName, Record, State, Actions) ->
 
 %%% TLS record protocol level application data messages 
 
+handle_protocol_record(#ssl_tls{type = ?APPLICATION_DATA, fragment = Data}, StateName, 
+                       #state{start_or_recv_from = From,
+                              socket_options = #socket_options{active = false}} = State0) when From =/= undefined ->
+    ssl_connection:passive_receive(Data, State0, StateName, ?MODULE, [{{timeout, recv}, infinity, timeout}]);
 handle_protocol_record(#ssl_tls{type = ?APPLICATION_DATA, fragment = Data}, StateName, State0) ->
     case ssl_connection:read_application_data(Data, State0) of
 	{stop, _, _} = Stop->

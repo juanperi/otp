@@ -55,7 +55,7 @@
          handle_trusted_certs_db/1]).
 
 %% Data handling
--export([read_application_data/2, internal_renegotiation/2]).
+-export([read_application_data/2, internal_renegotiation/2, passive_receive/5]).
 
 %% Help functions for tls|dtls_connection.erl
 -export([handle_session/7, ssl_config/3,
@@ -445,21 +445,24 @@ passive_receive(State0 = #state{user_data_buffer = {_,BufferSize,_}}, StateName,
 	    {Record, State} = Connection:next_record(State0),
 	    Connection:next_event(StateName, Record, State, StartTimerAction);
 	_ ->
-	    case read_application_data(<<>>, State0) of
-                {stop, _, _} = ShutdownError ->
-                    ShutdownError;
-                {Record, State} ->
-                    case State#state.start_or_recv_from of
-                        undefined ->
-                            %% Cancel recv timeout as data has been delivered
-                            Connection:next_event(StateName, Record, State, 
-                                                  [{{timeout, recv}, infinity, timeout}]);
-                        _ ->
-                            Connection:next_event(StateName, Record, State, StartTimerAction)
-                    end
-            end
+            passive_receive(<<>>, State0, StateName, Connection, StartTimerAction)    
     end.
 
+passive_receive(Data, State0, StateName, Connection, StartTimerAction) ->
+    case read_application_data(Data, State0) of
+        {stop, _, _} = ShutdownError ->
+            ShutdownError;
+        {Record, State} ->
+            case State#state.start_or_recv_from of
+                undefined ->
+                    %% Cancel recv timeout as data has been delivered
+                    Connection:next_event(StateName, Record, State, 
+                                          [{{timeout, recv}, infinity, timeout}]);
+                _ ->
+                    Connection:next_event(StateName, Record, State, StartTimerAction)
+            end
+    end. 
+                             
 read_application_data(
   Data,
   #state{
