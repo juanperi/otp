@@ -1343,7 +1343,7 @@ common_ciphers(openssl) ->
         string:tokens(string:strip(os:cmd("openssl ciphers"), right, $\n), ":"),
     [ssl_cipher_format:suite_definition(S)
      || S <- ssl_cipher:suites(tls_record:highest_protocol_version([])),
-        lists:member(ssl_cipher_format:openssl_suite_name(S), OpenSslSuites)
+        lists:member(ssl_cipher_format:suite_to_openssl_str(ssl_cipher_format:suite_definition(S)), OpenSslSuites)
     ].
 
 available_suites(Version) ->
@@ -1941,7 +1941,7 @@ version_flag('dtlsv1') ->
     "-dtls1".
 
 filter_suites([Cipher | _] = Ciphers, AtomVersion) when is_list(Cipher)->
-    filter_suites([ssl_cipher_format:openssl_suite(S) || S <- Ciphers], 
+    filter_suites([ssl_cipher_format:openssl_str_to_suite(S) || S <- Ciphers], 
                   AtomVersion);
 filter_suites([Cipher | _] = Ciphers, AtomVersion) when is_binary(Cipher)->
     filter_suites([ssl_cipher_format:suite_definition(S) || S <- Ciphers], 

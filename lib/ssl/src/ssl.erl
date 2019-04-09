@@ -792,7 +792,7 @@ cipher_suites(erlang) ->
     [ssl_cipher_format:erl_suite_definition(Suite) || Suite <- available_suites(default)];
 
 cipher_suites(openssl) ->
-    [ssl_cipher_format:openssl_suite_name(Suite) ||
+    [ssl_cipher_format:suite_to_openssl_str(ssl_cipher_format:suite_definition(Suite)) ||
         Suite <- available_suites(default)];
 
 cipher_suites(all) ->
@@ -1832,11 +1832,11 @@ binary_cipher_suites(Version, [Cipher0 | _] = Ciphers0) when is_binary(Cipher0) 
     end;
 binary_cipher_suites(Version, [Head | _] = Ciphers0) when is_list(Head) ->
     %% Format: ["RC4-SHA","RC4-MD5"]
-    Ciphers = [ssl_cipher_format:openssl_suite(C) || C <- Ciphers0],
+    Ciphers = [ssl_cipher_format:openssl_str_to_suite(C) || C <- Ciphers0],
     binary_cipher_suites(Version, Ciphers);
 binary_cipher_suites(Version, Ciphers0)  ->
     %% Format: "RC4-SHA:RC4-MD5"
-    Ciphers = [ssl_cipher_format:openssl_suite(C) || C <- string:lexemes(Ciphers0, ":")],
+    Ciphers = [ssl_cipher_format:openssl_str_to_suite(C) || C <- string:lexemes(Ciphers0, ":")],
     binary_cipher_suites(Version, Ciphers).
 
 default_binary_suites(Version) ->

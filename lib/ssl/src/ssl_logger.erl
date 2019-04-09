@@ -206,10 +206,8 @@ parse_handshake(Direction, #encrypted_extensions{} = EncryptedExtensions) ->
 parse_cipher_suites([_|_] = Ciphers) ->
     [format_cipher(C) || C <- Ciphers].
 
-format_cipher(?TLS_EMPTY_RENEGOTIATION_INFO_SCSV) ->
-    'TLS_EMPTY_RENEGOTIATION_INFO_SCSV';
 format_cipher(C0) ->
-    list_to_atom(ssl_cipher_format:openssl_suite_name(C0)).
+    list_to_atom(ssl_cipher_format:suite_to_openssl_str(C0)).
 
 get_client_version(Version, Extensions) ->
     CHVersions = maps:get(client_hello_versions, Extensions, undefined),

@@ -48,8 +48,14 @@
 -type openssl_cipher_suite()  :: string().
 
 
--export([suite_to_str/1, suite_definition/1, suite/1, erl_suite_definition/1, 
-         openssl_suite/1, openssl_suite_name/1]).
+-export([suite/1,            %% Binary format  
+         suite_definition/1, %% Erlang API format
+         suite_to_str/1,     %% RFC string
+         str_to_suite/1,
+         suite_to_openssl_str/1, %% OpenSSL name
+         openssl_str_to_suite/1,
+         erl_suite_definition/1 %% Erlang legacy format
+        ]).
 
 %%--------------------------------------------------------------------
 -spec suite_to_str(internal_erl_cipher_suite()) -> string().
@@ -80,6 +86,86 @@ suite_to_str(#{key_exchange := Kex,
     "TLS_" ++ string:to_upper(atom_to_list(Kex)) ++
         "_WITH_" ++  string:to_upper(atom_to_list(Cipher)) ++
         "_" ++ string:to_upper(atom_to_list(Mac)).
+
+str_to_suite("TLS_EMPTY_RENEGOTIATION_INFO_SCSV") ->
+    #{key_exchange => null,
+      cipher => null,
+      mac => null,
+      prf => null};
+str_to_suite(SuiteStr)->
+    Str0 = string:trim(SuiteStr, leading, "TLS_"),
+    case string:split(Str0, "_WITH_") of
+        [Rest] ->
+            tls_1_3_str_to_suite(Rest);
+        [Kex| Rest] ->
+            pre_tls_1_3_str_to_suite(Kex, Rest)
+    end.
+
+suite_to_openssl_str(#{key_exchange := any,
+                       mac := aead} = Suite) ->
+    %% TLS 1.3 OpenSSL finally use RFC names
+    suite_to_str(Suite);
+suite_to_openssl_str(#{key_exchange := null} = Suite) ->
+    %% TLS_EMPTY_RENEGOTIATION_INFO_SCSV
+    suite_to_str(Suite);
+suite_to_openssl_str(#{key_exchange := Kex,
+                       cipher := chacha20_poly1305 = Cipher,
+                       mac := aead}) ->
+    openssl_suite_start(string:to_upper(atom_to_list(Kex))) 
+        ++  openssl_cipher_name(Kex, string:to_upper(atom_to_list(Cipher)));
+suite_to_openssl_str(#{key_exchange := Kex,
+                       cipher := Cipher,
+                       mac := aead,
+                       prf := PRF}) ->
+    openssl_suite_start(string:to_upper(atom_to_list(Kex))) 
+        ++  openssl_cipher_name(Kex, string:to_upper(atom_to_list(Cipher))) ++
+        "-" ++ string:to_upper(atom_to_list(PRF));
+suite_to_openssl_str(#{key_exchange := Kex,
+                       cipher := Cipher,
+                       mac := Mac}) ->
+    openssl_suite_start(string:to_upper(atom_to_list(Kex))) 
+        ++  openssl_cipher_name(Kex, string:to_upper(atom_to_list(Cipher))) ++
+        "-" ++ string:to_upper(atom_to_list(Mac)).
+
+
+openssl_str_to_suite("TLS_" ++ _ = SuiteStr) ->
+    str_to_suite(SuiteStr);
+openssl_str_to_suite("DHE-RSA-" ++ Rest) ->
+    openssl_str_to_suite("DHE-RSA", Rest);
+openssl_str_to_suite("DHE-DSS-" ++ Rest) ->
+    openssl_str_to_suite("DHE-DSS", Rest);
+openssl_str_to_suite("EDH-RSA-" ++ Rest) ->
+    openssl_str_to_suite("DHE-RSA", Rest);
+openssl_str_to_suite("EDH-DSS-" ++ Rest) ->
+    openssl_str_to_suite("DHE-DSS", Rest);
+openssl_str_to_suite("DES" ++ _ = Rest) ->
+    openssl_str_to_suite("RSA", Rest);
+openssl_str_to_suite("AES" ++ _ = Rest) ->
+    openssl_str_to_suite("RSA", Rest);
+openssl_str_to_suite("RC4" ++ _ = Rest) ->
+    openssl_str_to_suite("RSA", Rest);
+openssl_str_to_suite("ECDH-RSA-" ++ Rest) ->
+    openssl_str_to_suite("ECDH-RSA", Rest);
+openssl_str_to_suite("ECDH-ECDSA-" ++ Rest) ->
+    openssl_str_to_suite("ECDH-ECDSA", Rest);
+openssl_str_to_suite("ECDHE-RSA-" ++ Rest) ->
+    openssl_str_to_suite("ECDHE-RSA", Rest);
+openssl_str_to_suite("ECDHE-ECDSA-" ++ Rest) ->
+    openssl_str_to_suite("ECDHE-ECDSA", Rest);
+openssl_str_to_suite("RSA-PSK-" ++ Rest) ->
+    openssl_str_to_suite("RSA-PSK", Rest);
+openssl_str_to_suite("RSA-" ++ Rest) ->
+    openssl_str_to_suite("RSA", Rest);
+openssl_str_to_suite("DHE-PSK-" ++ Rest) ->
+    openssl_str_to_suite("DHE-PSK", Rest);
+openssl_str_to_suite("ECDHE-PSK-" ++ Rest) ->
+    openssl_str_to_suite("ECDHE-PSK", Rest);
+openssl_str_to_suite("PSK-" ++ Rest) ->
+    openssl_str_to_suite("PSK", Rest);
+openssl_str_to_suite("SRP-RSA-" ++ Rest) ->
+    openssl_str_to_suite("SRP-RSA", Rest);
+openssl_str_to_suite("SRP-" ++ Rest) ->
+    openssl_str_to_suite("SRP", Rest).
 
 %%--------------------------------------------------------------------
 -spec suite_definition(cipher_suite()) -> internal_erl_cipher_suite().
@@ -873,7 +959,7 @@ suite_definition(?TLS_CHACHA20_POLY1305_SHA256) ->
 %% suite_definition(?TLS_AES_128_CCM_SHA256) ->
 %%      #{key_exchange => any,
 %%        cipher => aes_128_ccm,
-%%        mac => aead,
+%%        mac => aead
 %%        prf => sha256};
 %% suite_definition(?TLS_AES_128_CCM_8_SHA256) ->
 %%      #{key_exchange => any,
@@ -1615,361 +1701,179 @@ suite(#{key_exchange := any,
 %%       mac := aead,
 %%       prf := sha256}) ->
 %%     ?TLS_AES_128_CCM_8_SHA256.
-%%--------------------------------------------------------------------
--spec openssl_suite(openssl_cipher_suite()) -> cipher_suite().
-%%
-%% Description: Return TLS cipher suite definition.
-%%--------------------------------------------------------------------
-%% translate constants <-> openssl-strings
-openssl_suite("DHE-RSA-AES256-SHA256") ->
-    ?TLS_DHE_RSA_WITH_AES_256_CBC_SHA256;
-openssl_suite("DHE-DSS-AES256-SHA256") ->
-    ?TLS_DHE_DSS_WITH_AES_256_CBC_SHA256;
-openssl_suite("AES256-SHA256") ->
-    ?TLS_RSA_WITH_AES_256_CBC_SHA256;
-openssl_suite("DHE-RSA-AES128-SHA256") ->
-    ?TLS_DHE_RSA_WITH_AES_128_CBC_SHA256;
-openssl_suite("DHE-DSS-AES128-SHA256") ->
-    ?TLS_DHE_DSS_WITH_AES_128_CBC_SHA256;
-openssl_suite("AES128-SHA256") ->
-    ?TLS_RSA_WITH_AES_128_CBC_SHA256;
-openssl_suite("DHE-RSA-AES256-SHA") ->
-    ?TLS_DHE_RSA_WITH_AES_256_CBC_SHA;
-openssl_suite("DHE-DSS-AES256-SHA") ->
-    ?TLS_DHE_DSS_WITH_AES_256_CBC_SHA;
-openssl_suite("AES256-SHA") ->
-    ?TLS_RSA_WITH_AES_256_CBC_SHA;
-openssl_suite("EDH-RSA-DES-CBC3-SHA") ->
-    ?TLS_DHE_RSA_WITH_3DES_EDE_CBC_SHA;
-openssl_suite("EDH-DSS-DES-CBC3-SHA") ->
-    ?TLS_DHE_DSS_WITH_3DES_EDE_CBC_SHA;
-openssl_suite("DES-CBC3-SHA") ->
-    ?TLS_RSA_WITH_3DES_EDE_CBC_SHA;
-openssl_suite("DHE-RSA-AES128-SHA") ->
-    ?TLS_DHE_RSA_WITH_AES_128_CBC_SHA;
-openssl_suite("DHE-DSS-AES128-SHA") ->
-    ?TLS_DHE_DSS_WITH_AES_128_CBC_SHA;
-openssl_suite("AES128-SHA") ->
-    ?TLS_RSA_WITH_AES_128_CBC_SHA;
-openssl_suite("RC4-SHA") ->
-    ?TLS_RSA_WITH_RC4_128_SHA;
-openssl_suite("RC4-MD5") -> 
-    ?TLS_RSA_WITH_RC4_128_MD5;
-openssl_suite("EDH-RSA-DES-CBC-SHA") ->
-    ?TLS_DHE_RSA_WITH_DES_CBC_SHA;
-openssl_suite("DES-CBC-SHA") ->
-    ?TLS_RSA_WITH_DES_CBC_SHA;
-
-%%% SRP Cipher Suites RFC 5054
-
-openssl_suite("SRP-DSS-AES-256-CBC-SHA") ->
-    ?TLS_SRP_SHA_DSS_WITH_AES_256_CBC_SHA;
-openssl_suite("SRP-RSA-AES-256-CBC-SHA") ->
-    ?TLS_SRP_SHA_RSA_WITH_AES_256_CBC_SHA;
-openssl_suite("SRP-DSS-3DES-EDE-CBC-SHA") ->
-    ?TLS_SRP_SHA_DSS_WITH_3DES_EDE_CBC_SHA;
-openssl_suite("SRP-RSA-3DES-EDE-CBC-SHA") ->
-    ?TLS_SRP_SHA_RSA_WITH_3DES_EDE_CBC_SHA;
-openssl_suite("SRP-DSS-AES-128-CBC-SHA") ->
-    ?TLS_SRP_SHA_DSS_WITH_AES_128_CBC_SHA;
-openssl_suite("SRP-RSA-AES-128-CBC-SHA") ->
-    ?TLS_SRP_SHA_RSA_WITH_AES_128_CBC_SHA;
-
-%% RFC 4492 EC TLS suites
-openssl_suite("ECDH-ECDSA-RC4-SHA") ->
-    ?TLS_ECDH_ECDSA_WITH_RC4_128_SHA;
-openssl_suite("ECDH-ECDSA-DES-CBC3-SHA") ->
-    ?TLS_ECDH_ECDSA_WITH_3DES_EDE_CBC_SHA;
-openssl_suite("ECDH-ECDSA-AES128-SHA") ->
-    ?TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA;
-openssl_suite("ECDH-ECDSA-AES256-SHA") ->
-    ?TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA;
-
-openssl_suite("ECDHE-ECDSA-RC4-SHA") ->
-    ?TLS_ECDHE_ECDSA_WITH_RC4_128_SHA;
-openssl_suite("ECDHE-ECDSA-DES-CBC3-SHA") ->
-    ?TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA;
-openssl_suite("ECDHE-ECDSA-AES128-SHA") ->
-    ?TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA;
-openssl_suite("ECDHE-ECDSA-AES256-SHA") ->
-    ?TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA;
-
-openssl_suite("ECDHE-RSA-RC4-SHA") ->
-    ?TLS_ECDHE_RSA_WITH_RC4_128_SHA;
-openssl_suite("ECDHE-RSA-DES-CBC3-SHA") ->
-    ?TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA;
-openssl_suite("ECDHE-RSA-AES128-SHA") ->
-    ?TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA;
-openssl_suite("ECDHE-RSA-AES256-SHA") ->
-    ?TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA;
-
-openssl_suite("ECDH-RSA-RC4-SHA") ->
-    ?TLS_ECDH_RSA_WITH_RC4_128_SHA;
-openssl_suite("ECDH-RSA-DES-CBC3-SHA") ->
-    ?TLS_ECDH_RSA_WITH_3DES_EDE_CBC_SHA;
-openssl_suite("ECDH-RSA-AES128-SHA") ->
-    ?TLS_ECDH_RSA_WITH_AES_128_CBC_SHA;
-openssl_suite("ECDH-RSA-AES256-SHA") ->
-    ?TLS_ECDH_RSA_WITH_AES_256_CBC_SHA;
-
-%% RFC 5289 EC TLS suites
-openssl_suite("ECDHE-ECDSA-AES128-SHA256") ->
-    ?TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256;
-openssl_suite("ECDHE-ECDSA-AES256-SHA384") ->
-    ?TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384;
-openssl_suite("ECDH-ECDSA-AES128-SHA256") ->
-    ?TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA256;
-openssl_suite("ECDH-ECDSA-AES256-SHA384") ->
-    ?TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA384;
-openssl_suite("ECDHE-RSA-AES128-SHA256") ->
-    ?TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256;
-openssl_suite("ECDHE-RSA-AES256-SHA384") ->
-    ?TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384;
-openssl_suite("ECDH-RSA-AES128-SHA256") ->
-    ?TLS_ECDH_RSA_WITH_AES_128_CBC_SHA256;
-openssl_suite("ECDH-RSA-AES256-SHA384") ->
-    ?TLS_ECDH_RSA_WITH_AES_256_CBC_SHA384;
-
-%% RFC 5288 AES-GCM Cipher Suites
-openssl_suite("AES128-GCM-SHA256") ->
-    ?TLS_RSA_WITH_AES_128_GCM_SHA256;
-openssl_suite("AES256-GCM-SHA384") ->
-    ?TLS_RSA_WITH_AES_256_GCM_SHA384;
-openssl_suite("DHE-RSA-AES128-GCM-SHA256") ->
-    ?TLS_DHE_RSA_WITH_AES_128_GCM_SHA256;
-openssl_suite("DHE-RSA-AES256-GCM-SHA384") ->
-    ?TLS_DHE_RSA_WITH_AES_256_GCM_SHA384;
-openssl_suite("DH-RSA-AES128-GCM-SHA256") ->
-    ?TLS_DH_RSA_WITH_AES_128_GCM_SHA256;
-openssl_suite("DH-RSA-AES256-GCM-SHA384") ->
-    ?TLS_DH_RSA_WITH_AES_256_GCM_SHA384;
-openssl_suite("DHE-DSS-AES128-GCM-SHA256") ->
-    ?TLS_DHE_DSS_WITH_AES_128_GCM_SHA256;
-openssl_suite("DHE-DSS-AES256-GCM-SHA384") ->
-    ?TLS_DHE_DSS_WITH_AES_256_GCM_SHA384;
-openssl_suite("DH-DSS-AES128-GCM-SHA256") ->
-    ?TLS_DH_DSS_WITH_AES_128_GCM_SHA256;
-openssl_suite("DH-DSS-AES256-GCM-SHA384") ->
-    ?TLS_DH_DSS_WITH_AES_256_GCM_SHA384;
-
-%% RFC 5289 ECC AES-GCM Cipher Suites
-openssl_suite("ECDHE-ECDSA-AES128-GCM-SHA256") ->
-    ?TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256;
-openssl_suite("ECDHE-ECDSA-AES256-GCM-SHA384") ->
-    ?TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384;
-openssl_suite("ECDH-ECDSA-AES128-GCM-SHA256") ->
-    ?TLS_ECDH_ECDSA_WITH_AES_128_GCM_SHA256;
-openssl_suite("ECDH-ECDSA-AES256-GCM-SHA384") ->
-    ?TLS_ECDH_ECDSA_WITH_AES_256_GCM_SHA384;
-openssl_suite("ECDHE-RSA-AES128-GCM-SHA256") ->
-    ?TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256;
-openssl_suite("ECDHE-RSA-AES256-GCM-SHA384") ->
-    ?TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384;
-openssl_suite("ECDH-RSA-AES128-GCM-SHA256") ->
-    ?TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256;
-openssl_suite("ECDH-RSA-AES256-GCM-SHA384") ->
-    ?TLS_ECDH_RSA_WITH_AES_256_GCM_SHA384;
-
-%% TLS 1.3 Cipher Suites RFC8446
-openssl_suite("TLS_AES_128_GCM_SHA256") ->
-    ?TLS_AES_128_GCM_SHA256;
-openssl_suite("TLS_AES_256_GCM_SHA384") ->
-    ?TLS_AES_256_GCM_SHA384;
-openssl_suite("TLS_CHACHA20_POLY1305_SHA256") ->
-    ?TLS_CHACHA20_POLY1305_SHA256.
-%% openssl_suite("TLS_AES_128_CCM_SHA256") ->
-%%     ?TLS_AES_128_CCM_SHA256;
-%% openssl_suite("TLS_AES_128_CCM_8_SHA256") ->
-%%     ?TLS_AES_128_CCM_8_SHA256.
 
 
-%%--------------------------------------------------------------------
--spec openssl_suite_name(cipher_suite()) -> openssl_cipher_suite() | internal_erl_cipher_suite().
-%%
-%% Description: Return openssl cipher suite name if possible
-%%-------------------------------------------------------------------
-openssl_suite_name(?TLS_DHE_RSA_WITH_AES_256_CBC_SHA) ->
-    "DHE-RSA-AES256-SHA";
-openssl_suite_name(?TLS_DHE_DSS_WITH_AES_256_CBC_SHA) ->
-    "DHE-DSS-AES256-SHA";
-openssl_suite_name(?TLS_RSA_WITH_AES_256_CBC_SHA) ->
-    "AES256-SHA";
-openssl_suite_name(?TLS_DHE_RSA_WITH_3DES_EDE_CBC_SHA) ->
-    "EDH-RSA-DES-CBC3-SHA";
-openssl_suite_name(?TLS_DHE_DSS_WITH_3DES_EDE_CBC_SHA) ->
-    "EDH-DSS-DES-CBC3-SHA";
-openssl_suite_name(?TLS_RSA_WITH_3DES_EDE_CBC_SHA) ->
-    "DES-CBC3-SHA";
-openssl_suite_name( ?TLS_DHE_RSA_WITH_AES_128_CBC_SHA) ->
-    "DHE-RSA-AES128-SHA";
-openssl_suite_name(?TLS_DHE_DSS_WITH_AES_128_CBC_SHA) ->
-    "DHE-DSS-AES128-SHA";
-openssl_suite_name(?TLS_RSA_WITH_AES_128_CBC_SHA) ->
-    "AES128-SHA";
-openssl_suite_name(?TLS_RSA_WITH_RC4_128_SHA) ->
-    "RC4-SHA";
-openssl_suite_name(?TLS_RSA_WITH_RC4_128_MD5) -> 
-    "RC4-MD5";
-openssl_suite_name(?TLS_DHE_RSA_WITH_DES_CBC_SHA) ->
-    "EDH-RSA-DES-CBC-SHA";
-openssl_suite_name(?TLS_RSA_WITH_DES_CBC_SHA) ->
-    "DES-CBC-SHA";
-openssl_suite_name(?TLS_RSA_WITH_NULL_SHA256) ->
-    "NULL-SHA256";
-openssl_suite_name(?TLS_RSA_WITH_AES_128_CBC_SHA256) ->
-    "AES128-SHA256";
-openssl_suite_name(?TLS_RSA_WITH_AES_256_CBC_SHA256) ->
-    "AES256-SHA256";
-openssl_suite_name(?TLS_DH_DSS_WITH_AES_128_CBC_SHA256) ->
-    "DH-DSS-AES128-SHA256";
-openssl_suite_name(?TLS_DH_RSA_WITH_AES_128_CBC_SHA256) ->
-    "DH-RSA-AES128-SHA256";
-openssl_suite_name(?TLS_DHE_DSS_WITH_AES_128_CBC_SHA256) ->
-    "DHE-DSS-AES128-SHA256";
-openssl_suite_name(?TLS_DHE_RSA_WITH_AES_128_CBC_SHA256) ->
-    "DHE-RSA-AES128-SHA256";
-openssl_suite_name(?TLS_DH_DSS_WITH_AES_256_CBC_SHA256) ->
-    "DH-DSS-AES256-SHA256";
-openssl_suite_name(?TLS_DH_RSA_WITH_AES_256_CBC_SHA256) ->
-    "DH-RSA-AES256-SHA256";
-openssl_suite_name(?TLS_DHE_DSS_WITH_AES_256_CBC_SHA256) ->
-    "DHE-DSS-AES256-SHA256";
-openssl_suite_name(?TLS_DHE_RSA_WITH_AES_256_CBC_SHA256) ->
-    "DHE-RSA-AES256-SHA256";
+tls_1_3_str_to_suite(CipherStr) ->
+    {Cipher, Mac, Prf} = cipher_str_to_algs(CipherStr, ""),
+    #{key_exchange => any,
+      mac => Mac,
+      cipher => Cipher,
+      prf => Prf   
+     }.
 
-%%% PSK Cipher Suites RFC 4279
+pre_tls_1_3_str_to_suite(KexStr, Rest) ->
+    Kex = algo_str_to_atom(KexStr),
+    [CipherStr, AlgStr] = string:split(Rest, "_", trailing),
+    {Cipher, Mac, Prf} = cipher_str_to_algs(CipherStr, AlgStr),
+    #{key_exchange => Kex,
+      mac => Mac,
+      cipher => Cipher,
+      prf => Prf   
+     }.
+                
+cipher_str_to_algs(CipherStr, "CCM"= End) -> %% PRE TLS 1.3
+    Cipher = algo_str_to_atom(CipherStr ++ "_" ++ End),
+    {Cipher, aead, sha256};
+cipher_str_to_algs(CipherStr, "8" = End) -> %% PRE TLS 1.3
+    Cipher = algo_str_to_atom(CipherStr ++ "_" ++ End),
+    {Cipher, aead, sha256};
+cipher_str_to_algs(CipherStr, "CHACHA20_POLY1305" = End) -> %% PRE TLS 1.3
+    Cipher = algo_str_to_atom(CipherStr ++ "_" ++ End),
+    {Cipher, aead, sha256};
+cipher_str_to_algs(CipherStr0, "") -> %% TLS 1.3
+    [CipherStr, AlgStr] = string:split(CipherStr0, "_", trailing),
+    Hash = algo_str_to_atom(AlgStr),
+    Cipher = algo_str_to_atom(CipherStr),
+    {Cipher, aead, Hash};
+cipher_str_to_algs(CipherStr, HashStr) -> %% PRE TLS 1.3
+    Hash = algo_str_to_atom(HashStr),
+    Cipher = algo_str_to_atom(CipherStr),
+    case is_aead_cipher(CipherStr) of
+        true ->
+            {Cipher, aead, Hash};
+        false ->
+            {Cipher, Hash, default_prf}
+    end.
 
-openssl_suite_name(?TLS_PSK_WITH_AES_256_CBC_SHA) ->
-    "PSK-AES256-CBC-SHA";
-openssl_suite_name(?TLS_PSK_WITH_3DES_EDE_CBC_SHA) ->
-    "PSK-3DES-EDE-CBC-SHA";
-openssl_suite_name(?TLS_PSK_WITH_AES_128_CBC_SHA) ->
-    "PSK-AES128-CBC-SHA";
-openssl_suite_name(?TLS_PSK_WITH_RC4_128_SHA) ->
-    "PSK-RC4-SHA";
+%% PRE TLS 1.3
+is_aead_cipher("CHACHA20_POLY1305") ->
+    true;
+is_aead_cipher(CipherStr) ->
+    [_, Rest] = string:split(CipherStr, "_", trailing),
+    (Rest == "GCM") orelse (Rest == "CCM") orelse (Rest == "8").
 
-%%% SRP Cipher Suites RFC 5054
+openssl_is_aead_cipher("CHACHA20-POLY1305") ->
+    true;
+openssl_is_aead_cipher(CipherStr) ->
+    case string:split(CipherStr, "-", trailing) of
+        [_, Rest] ->      
+            (Rest == "GCM") orelse (Rest == "CCM") orelse (Rest == "8");
+        [_] ->
+            false
+    end.  
 
-openssl_suite_name(?TLS_SRP_SHA_RSA_WITH_3DES_EDE_CBC_SHA) ->
-    "SRP-RSA-3DES-EDE-CBC-SHA";
-openssl_suite_name(?TLS_SRP_SHA_DSS_WITH_3DES_EDE_CBC_SHA) ->
-    "SRP-DSS-3DES-EDE-CBC-SHA";
-openssl_suite_name(?TLS_SRP_SHA_RSA_WITH_AES_128_CBC_SHA) ->
-    "SRP-RSA-AES-128-CBC-SHA";
-openssl_suite_name(?TLS_SRP_SHA_DSS_WITH_AES_128_CBC_SHA) ->
-    "SRP-DSS-AES-128-CBC-SHA";
-openssl_suite_name(?TLS_SRP_SHA_RSA_WITH_AES_256_CBC_SHA) ->
-    "SRP-RSA-AES-256-CBC-SHA";
-openssl_suite_name(?TLS_SRP_SHA_DSS_WITH_AES_256_CBC_SHA) ->
-    "SRP-DSS-AES-256-CBC-SHA";
+algo_str_to_atom(AlgoStr) ->
+    erlang:list_to_existing_atom(string:to_lower(AlgoStr)).
 
-%% RFC 4492 EC TLS suites
-openssl_suite_name(?TLS_ECDH_ECDSA_WITH_RC4_128_SHA) ->
-    "ECDH-ECDSA-RC4-SHA";
-openssl_suite_name(?TLS_ECDH_ECDSA_WITH_3DES_EDE_CBC_SHA) ->
-    "ECDH-ECDSA-DES-CBC3-SHA";
-openssl_suite_name(?TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA) ->
-    "ECDH-ECDSA-AES128-SHA";
-openssl_suite_name(?TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA) ->
-    "ECDH-ECDSA-AES256-SHA";
 
-openssl_suite_name(?TLS_ECDHE_ECDSA_WITH_RC4_128_SHA) ->
-    "ECDHE-ECDSA-RC4-SHA";
-openssl_suite_name(?TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA) ->
-    "ECDHE-ECDSA-DES-CBC3-SHA";
-openssl_suite_name(?TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA) ->
-    "ECDHE-ECDSA-AES128-SHA";
-openssl_suite_name(?TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA) ->
-    "ECDHE-ECDSA-AES256-SHA";
+openssl_cipher_name(Kex, "AES_128_CBC" ++ _ = CipherStr) when Kex == rsa;
+                                                              Kex == dhe_rsa;
+                                                              Kex == ecdhe_rsa;
+                                                              Kex == ecdhe_ecdsa ->
+    openssl_name_concat(CipherStr);
+openssl_cipher_name(Kex, "AES_256_CBC" ++ _ = CipherStr) when Kex == rsa;
+                                                              Kex == dhe_rsa;
+                                                              Kex == ecdhe_rsa;
+                                                              Kex == ecdhe_ecdsa ->
+    openssl_name_concat(CipherStr);
+openssl_cipher_name(Kex, "AES_128_CBC" ++ _ = CipherStr) when Kex == srp;
+                                                              Kex == srp_rsa ->
+    lists:append(string:replace(CipherStr, "_", "-", all));
+openssl_cipher_name(Kex, "AES_256_CBC" ++ _ = CipherStr) when Kex == srp;
+                                                              Kex == srp_rsa ->
+    lists:append(string:replace(CipherStr, "_", "-", all));
+openssl_cipher_name(_, "AES_128_CBC" ++ _ = CipherStr) ->
+    openssl_name_concat(CipherStr)  ++ "-CBC";
+openssl_cipher_name(_, "AES_256_CBC" ++ _ = CipherStr) ->
+    openssl_name_concat(CipherStr)  ++ "-CBC";
+openssl_cipher_name(_, "AES_128_GCM" ++ _ = CipherStr) ->
+    openssl_name_concat(CipherStr) ++ "-GCM";
+openssl_cipher_name(_, "AES_256_GCM" ++ _ = CipherStr) ->
+    openssl_name_concat(CipherStr) ++ "-GCM";
+openssl_cipher_name(_, "RC4" ++ _) ->
+    "RC4";
+openssl_cipher_name(_, CipherStr) ->
+    lists:append(string:replace(CipherStr, "_", "-", all)).
 
-openssl_suite_name(?TLS_ECDH_RSA_WITH_RC4_128_SHA) ->
-    "ECDH-RSA-RC4-SHA";
-openssl_suite_name(?TLS_ECDH_RSA_WITH_3DES_EDE_CBC_SHA) ->
-    "ECDH-RSA-DES-CBC3-SHA";
-openssl_suite_name(?TLS_ECDH_RSA_WITH_AES_128_CBC_SHA) ->
-    "ECDH-RSA-AES128-SHA";
-openssl_suite_name(?TLS_ECDH_RSA_WITH_AES_256_CBC_SHA) ->
-    "ECDH-RSA-AES256-SHA";
 
-openssl_suite_name(?TLS_ECDHE_RSA_WITH_RC4_128_SHA) ->
-    "ECDHE-RSA-RC4-SHA";
-openssl_suite_name(?TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA) ->
-    "ECDHE-RSA-DES-CBC3-SHA";
-openssl_suite_name(?TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA) ->
-    "ECDHE-RSA-AES128-SHA";
-openssl_suite_name(?TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA) ->
-    "ECDHE-RSA-AES256-SHA";
+openssl_suite_start(Kex) ->
+    case openssl_kex_name(Kex) of
+        "" ->
+            "";
+        Name ->
+            Name ++ "-"
+    end.
 
-%% RFC 5289 EC TLS suites
-openssl_suite_name(?TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256) ->
-    "ECDHE-ECDSA-AES128-SHA256";
-openssl_suite_name(?TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384) ->
-    "ECDHE-ECDSA-AES256-SHA384";
-openssl_suite_name(?TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA256) ->
-    "ECDH-ECDSA-AES128-SHA256";
-openssl_suite_name(?TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA384) ->
-    "ECDH-ECDSA-AES256-SHA384";
-openssl_suite_name(?TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256) ->
-    "ECDHE-RSA-AES128-SHA256";
-openssl_suite_name(?TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384) ->
-    "ECDHE-RSA-AES256-SHA384";
-openssl_suite_name(?TLS_ECDH_RSA_WITH_AES_128_CBC_SHA256) ->
-    "ECDH-RSA-AES128-SHA256";
-openssl_suite_name(?TLS_ECDH_RSA_WITH_AES_256_CBC_SHA384) ->
-    "ECDH-RSA-AES256-SHA384";
+openssl_kex_name("RSA") ->
+    "";
+openssl_kex_name(Kex) ->
+    lists:append(string:replace(Kex, "_", "-", all)).
 
-%% RFC 5288 AES-GCM Cipher Suites
-openssl_suite_name(?TLS_RSA_WITH_AES_128_GCM_SHA256) ->
-    "AES128-GCM-SHA256";
-openssl_suite_name(?TLS_RSA_WITH_AES_256_GCM_SHA384) ->
-    "AES256-GCM-SHA384";
-openssl_suite_name(?TLS_DHE_RSA_WITH_AES_128_GCM_SHA256) ->
-    "DHE-RSA-AES128-GCM-SHA256";
-openssl_suite_name(?TLS_DHE_RSA_WITH_AES_256_GCM_SHA384) ->
-    "DHE-RSA-AES256-GCM-SHA384";
-openssl_suite_name(?TLS_DH_RSA_WITH_AES_128_GCM_SHA256) ->
-    "DH-RSA-AES128-GCM-SHA256";
-openssl_suite_name(?TLS_DH_RSA_WITH_AES_256_GCM_SHA384) ->
-    "DH-RSA-AES256-GCM-SHA384";
-openssl_suite_name(?TLS_DHE_DSS_WITH_AES_128_GCM_SHA256) ->
-    "DHE-DSS-AES128-GCM-SHA256";
-openssl_suite_name(?TLS_DHE_DSS_WITH_AES_256_GCM_SHA384) ->
-    "DHE-DSS-AES256-GCM-SHA384";
-openssl_suite_name(?TLS_DH_DSS_WITH_AES_128_GCM_SHA256) ->
-    "DH-DSS-AES128-GCM-SHA256";
-openssl_suite_name(?TLS_DH_DSS_WITH_AES_256_GCM_SHA384) ->
-    "DH-DSS-AES256-GCM-SHA384";
+kex_name_from_openssl(Kex) ->
+    lists:append(string:replace(Kex, "-", "_", all)).
 
-%% RFC 5289 ECC AES-GCM Cipher Suites
-openssl_suite_name(?TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256) ->
-    "ECDHE-ECDSA-AES128-GCM-SHA256";
-openssl_suite_name(?TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384) ->
-    "ECDHE-ECDSA-AES256-GCM-SHA384";
-openssl_suite_name(?TLS_ECDH_ECDSA_WITH_AES_128_GCM_SHA256) ->
-    "ECDH-ECDSA-AES128-GCM-SHA256";
-openssl_suite_name(?TLS_ECDH_ECDSA_WITH_AES_256_GCM_SHA384) ->
-    "ECDH-ECDSA-AES256-GCM-SHA384";
-openssl_suite_name(?TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256) ->
-    "ECDHE-RSA-AES128-GCM-SHA256";
-openssl_suite_name(?TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384) ->
-    "ECDHE-RSA-AES256-GCM-SHA384";
-openssl_suite_name(?TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256) ->
-    "ECDH-RSA-AES128-GCM-SHA256";
-openssl_suite_name(?TLS_ECDH_RSA_WITH_AES_256_GCM_SHA384) ->
-    "ECDH-RSA-AES256-GCM-SHA384";
+cipher_name_from_openssl("AES128") ->
+    "AES_128_CBC";
+cipher_name_from_openssl("AES256") ->
+    "AES_256_CBC";
+cipher_name_from_openssl("AES128-CBC") ->
+    "AES_128_CBC";
+cipher_name_from_openssl("AES256-CBC") ->
+    "AES_256_CBC";
+cipher_name_from_openssl("AES-128-CBC") ->
+    "AES_128_CBC";
+cipher_name_from_openssl("AES-256-CBC") ->
+    "AES_256_CBC";
+cipher_name_from_openssl("AES128-GCM") ->
+    "AES_128_GCM";
+cipher_name_from_openssl("AES256-GCM") ->
+    "AES_256_GCM";
+cipher_name_from_openssl("RC4") ->
+    "RC4_128";
+cipher_name_from_openssl(Str) ->
+    Str.
 
-%% TLS 1.3 Cipher Suites RFC8446
-openssl_suite_name(?TLS_AES_128_GCM_SHA256) ->
-    "TLS_AES_128_GCM_SHA256";
-openssl_suite_name(?TLS_AES_256_GCM_SHA384) ->
-    "TLS_AES_256_GCM_SHA384";
-openssl_suite_name(?TLS_CHACHA20_POLY1305_SHA256) ->
-    "TLS_CHACHA20_POLY1305_SHA256";
-%% openssl_suite(?TLS_AES_128_CCM_SHA256) ->
-%%     "TLS_AES_128_CCM_SHA256";
-%% openssl_suite(?TLS_AES_128_CCM_8_SHA256) ->
-%%     "TLS_AES_128_CCM_8_SHA256";
+openssl_name_concat(Str0) ->
+    [Str, _] = string:split(Str0, "_", trailing),
+    [Part1, Part2] = string:split(Str, "_", trailing),
+    Part1 ++ Part2.
 
-%% No oppenssl name
-openssl_suite_name(Cipher) ->
-    suite_definition(Cipher).
+
+openssl_str_to_suite(Kex0, Rest) ->
+    Kex = algo_str_to_atom(kex_name_from_openssl(Kex0)),
+    [CipherStr, AlgStr] = string:split(Rest, "-", trailing),
+    {Cipher, Mac, Prf} = openssl_cipher_str_to_algs(CipherStr, AlgStr),
+    #{key_exchange => Kex,
+      mac => Mac,
+      cipher => Cipher,
+      prf => Prf   
+     }.
+
+%% Does only need own implementation PRE TLS 1.3 
+openssl_cipher_str_to_algs(CipherStr, "CCM"= End) -> 
+    Cipher = algo_str_to_atom(CipherStr ++ "_" ++ End),
+    {Cipher, aead, sha256};
+openssl_cipher_str_to_algs(CipherStr, "8" = End) -> 
+    Cipher = algo_str_to_atom(CipherStr ++ "_" ++ End),
+    {Cipher, aead, sha256};
+openssl_cipher_str_to_algs(CipherStr, "POLY1305" = End) -> 
+    Cipher = algo_str_to_atom(CipherStr ++ "_" ++ End),
+    {Cipher, aead, sha256};
+openssl_cipher_str_to_algs(CipherStr, HashStr) ->
+    Hash = algo_str_to_atom(HashStr),
+    Cipher = algo_str_to_atom(cipher_name_from_openssl(CipherStr)),
+    case openssl_is_aead_cipher(CipherStr) of
+        true ->
+            {Cipher, aead, Hash};
+        false ->
+            {Cipher, Hash, openssl_prf(Hash)}
+    end.
+
+openssl_prf(sha256)->
+    sha256;
+openssl_prf(sha384) ->
+    sha384;
+openssl_prf(_) ->
+    default_prf.
+
+
