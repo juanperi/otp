@@ -2135,6 +2135,8 @@ consume_port_exit(OpenSSLPort) ->
     receive    	
         {'EXIT', OpenSSLPort, _} ->
             ok
+    after 500 ->
+            ok
     end.
 
 hardcode_rsa_key(1) ->

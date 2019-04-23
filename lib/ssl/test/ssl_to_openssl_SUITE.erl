@@ -411,7 +411,7 @@ erlang_server_openssl_client(Config) when is_list(Config) ->
     OpenSslPort =  ssl_test_lib:portable_open_port(Exe, Args),
 
     true = port_command(OpenSslPort, Data),
-    
+    ssl_test_lib:consume_port_exit(OpenSslPort),
     ssl_test_lib:check_result(Server, ok),
 
     %% Clean close down!   Server needs to be closed first !!
@@ -967,6 +967,7 @@ erlang_server_openssl_client_client_cert(Config) when is_list(Config) ->
     OpenSslPort = ssl_test_lib:portable_open_port(Exe, Args), 
 
     true = port_command(OpenSslPort, Data),    
+    ssl_test_lib:consume_port_exit(OpenSslPort),
     ssl_test_lib:check_result(Server, ok),
 
     %% Clean close down!   Server needs to be closed first !!
