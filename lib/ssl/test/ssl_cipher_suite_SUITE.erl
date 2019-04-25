@@ -317,11 +317,8 @@ end_per_testcase(_TestCase, Config) ->
     Config.
 
 init_certs(srp_rsa, Config) ->
-    DefConf = default_cert_chain_conf(),
-    CertChainConf = ssl_test_lib:gen_conf(rsa, rsa, DefConf, DefConf),
-    #{server_config := ServerOpts,
-      client_config := ClientOpts} 
-        = public_key:pkix_test_data(CertChainConf),
+    {ClientOpts, ServerOpts} = ssl_test_lib:make_rsa_cert_chains([{server_chain, default_cert_chain_conf()},
+                                                                  {client_chain, default_cert_chain_conf()}], Config, ""),
     [{tls_config, #{server_config => [{user_lookup_fun, {fun user_lookup/3, undefined}} | ServerOpts],
                     client_config => [{srp_identity, {"Test-User", "secret"}} | ClientOpts]}} |
      proplists:delete(tls_config, Config)];
@@ -330,9 +327,10 @@ init_certs(srp_anon, Config) ->
                     client_config => [{srp_identity, {"Test-User", "secret"}}]}} |
      proplists:delete(tls_config, Config)];
 init_certs(rsa_psk, Config) ->
-    ClientExt = x509_test:extensions([{key_usage, [digitalSignature, keyEncipherment]}]),
+    Ext = x509_test:extensions([{key_usage, [digitalSignature, keyEncipherment]}]),
     {ClientOpts, ServerOpts} = ssl_test_lib:make_rsa_cert_chains([{server_chain, 
-                                                                   [[],[],[{extensions, ClientExt}]]}], 
+                                                                   [[digest()],[digest()],[digest(), {extensions, Ext}]]},
+                                                                  {client_chain, default_cert_chain_conf()}], 
                                                                  Config, "_peer_keyEncipherment"),
     PskSharedSecret = <<1,2,3,4,5,6,7,8,9,10,11,12,13,14,15>>,
     [{tls_config, #{server_config => [{user_lookup_fun, {fun user_lookup/3, PskSharedSecret}} | ServerOpts],
@@ -340,48 +338,43 @@ init_certs(rsa_psk, Config) ->
                                       {user_lookup_fun, {fun user_lookup/3, PskSharedSecret}} | ClientOpts]}} |
      proplists:delete(tls_config, Config)];
 init_certs(rsa, Config) ->
-    ClientExt = x509_test:extensions([{key_usage, [digitalSignature, keyEncipherment]}]),
+    Ext = x509_test:extensions([{key_usage, [digitalSignature, keyEncipherment]}]),
+    %% {ClientOpts, ServerOpts} = ssl_test_lib:make_rsa_cert_chains([{server_chain, 
+    %%                                                                [[digest()],[digest()],[digest(), {extensions, Ext}]]},
+    %%                                                               {client_chain, default_cert_chain_conf()}
+    %%                                                              ], 
+    %%      Config, "_peer_keyEncipherment"),
     {ClientOpts, ServerOpts} = ssl_test_lib:make_rsa_cert_chains([{server_chain, 
-                                                                   [[],[],[{extensions, ClientExt}]]}], 
+                                                                   [[],[],[{extensions, Ext}]]}], 
                                                                  Config, "_peer_keyEncipherment"),
     [{tls_config, #{server_config => ServerOpts,
                     client_config => ClientOpts}} |
      proplists:delete(tls_config, Config)];
 init_certs(dhe_dss, Config) ->
-    DefConf = default_cert_chain_conf(),
-    CertChainConf = ssl_test_lib:gen_conf(dsa, dsa, DefConf, DefConf),
-    #{server_config := ServerOpts,
-      client_config := ClientOpts} 
-        = public_key:pkix_test_data(CertChainConf),
+     {ClientOpts, ServerOpts} = ssl_test_lib:make_dsa_cert_chains([{server_chain, default_cert_chain_conf()},
+                                                                  {client_chain, default_cert_chain_conf()}], 
+                                                                  Config, ""),
     [{tls_config, #{server_config => ServerOpts,
                     client_config => ClientOpts}} |
      proplists:delete(tls_config, Config)];
 init_certs(srp_dss, Config) ->
-    DefConf = default_cert_chain_conf(),
-    CertChainConf = ssl_test_lib:gen_conf(dsa, dsa, DefConf, DefConf),
-    #{server_config := ServerOpts,
-      client_config := ClientOpts} 
-        = public_key:pkix_test_data(CertChainConf),
+    {ClientOpts, ServerOpts} = ssl_test_lib:make_dsa_cert_chains([{server_chain, default_cert_chain_conf()},
+                                                                  {client_chain, default_cert_chain_conf()}], 
+                                                                 Config, ""),
     [{tls_config, #{server_config => [{user_lookup_fun, {fun user_lookup/3, undefined}} | ServerOpts],
                     client_config => [{srp_identity, {"Test-User", "secret"}} | ClientOpts]}} |
        proplists:delete(tls_config, Config)];
 init_certs(GroupName, Config) when GroupName == dhe_rsa;
                                    GroupName == ecdhe_rsa ->
-    DefConf = default_cert_chain_conf(),
-    CertChainConf = ssl_test_lib:gen_conf(rsa, rsa, DefConf, DefConf),
-    #{server_config := ServerOpts,
-      client_config := ClientOpts} 
-        = public_key:pkix_test_data(CertChainConf),
+    {ClientOpts, ServerOpts} = ssl_test_lib:make_rsa_cert_chains([{server_chain, default_cert_chain_conf()},
+                                                                  {client_chain, default_cert_chain_conf()}], Config, ""),
     [{tls_config, #{server_config => ServerOpts,
                     client_config => ClientOpts}} |
      proplists:delete(tls_config, Config)];
 init_certs(GroupName, Config) when GroupName == dhe_ecdsa;
                                    GroupName == ecdhe_ecdsa ->
-    DefConf = default_cert_chain_conf(),
-    CertChainConf = ssl_test_lib:gen_conf(ecdsa, ecdsa, DefConf, DefConf),
-    #{server_config := ServerOpts,
-      client_config := ClientOpts} 
-        = public_key:pkix_test_data(CertChainConf),
+    {ClientOpts, ServerOpts} = ssl_test_lib:make_ecc_cert_chains([{server_chain, default_cert_chain_conf()},
+                                                                 {client_chain, default_cert_chain_conf()}], Config, ""),
     [{tls_config, #{server_config => ServerOpts,
                     client_config => ClientOpts}} |
      proplists:delete(tls_config, Config)];
@@ -732,30 +725,28 @@ run_ciphers_test(Kex, Cipher, Config) ->
             {skip, {not_sup, Kex, Cipher, Version}}
     end.
 
-cipher_suite_test(CipherSuite, Version, Config) ->
+cipher_suite_test(ErlangCipherSuite, Version, Config) ->
     #{server_config := SOpts,
       client_config := COpts} = proplists:get_value(tls_config, Config),
     ServerOpts = ssl_test_lib:ssl_options(SOpts, Config),
     ClientOpts = ssl_test_lib:ssl_options(COpts, Config),
-    ct:log("Testing CipherSuite ~p~n", [CipherSuite]),
+    ct:log("Testing CipherSuite ~p~n", [ErlangCipherSuite]),
     ct:log("Server Opts ~p~n", [ServerOpts]),
     ct:log("Client Opts ~p~n", [ClientOpts]),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
-
-    ErlangCipherSuite = erlang_cipher_suite(CipherSuite),
 
     ConnectionInfo = {ok, {Version, ErlangCipherSuite}},
     
     Server = ssl_test_lib:start_server([{node, ServerNode}, {port, 0},
 					{from, self()},
                                         {mfa, {ssl_test_lib, cipher_result, [ConnectionInfo]}},
-                                        {options, [{versions, [Version]}, {ciphers, [CipherSuite]} | ServerOpts]}]),
+                                        {options, [{versions, [Version]}, {ciphers, [ErlangCipherSuite]} | ServerOpts]}]),
     Port = ssl_test_lib:inet_port(Server),
     Client = ssl_test_lib:start_client([{node, ClientNode}, {port, Port},
 					{host, Hostname},
 					{from, self()},
 					{mfa, {ssl_test_lib, cipher_result, [ConnectionInfo]}},
-					{options, [{versions, [Version]}, {ciphers, [CipherSuite]} |
+					{options, [{versions, [Version]}, {ciphers, [ErlangCipherSuite]} |
                                                    ClientOpts]}]),
 
     ssl_test_lib:check_result(Server, ok, Client, ok),
@@ -763,10 +754,6 @@ cipher_suite_test(CipherSuite, Version, Config) ->
     ssl_test_lib:close(Server),
     ssl_test_lib:close(Client).
 
-erlang_cipher_suite(Suite) when is_list(Suite)->
-    ssl_cipher_format:suite_definition(ssl_cipher_format:suite_openssl_str_to_map(Suite));
-erlang_cipher_suite(Suite) ->
-    Suite.
 
 user_lookup(psk, _Identity, UserState) ->
     {ok, UserState};
