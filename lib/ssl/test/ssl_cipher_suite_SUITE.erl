@@ -339,13 +339,10 @@ init_certs(rsa_psk, Config) ->
      proplists:delete(tls_config, Config)];
 init_certs(rsa, Config) ->
     Ext = x509_test:extensions([{key_usage, [digitalSignature, keyEncipherment]}]),
-    %% {ClientOpts, ServerOpts} = ssl_test_lib:make_rsa_cert_chains([{server_chain, 
-    %%                                                                [[digest()],[digest()],[digest(), {extensions, Ext}]]},
-    %%                                                               {client_chain, default_cert_chain_conf()}
-    %%                                                              ], 
-    %%      Config, "_peer_keyEncipherment"),
     {ClientOpts, ServerOpts} = ssl_test_lib:make_rsa_cert_chains([{server_chain, 
-                                                                   [[],[],[{extensions, Ext}]]}], 
+                                                                   [[digest()],[digest()],[digest(), {extensions, Ext}]]} %%,
+                                                                  %%{client_chain, default_cert_chain_conf()}
+                                                                 ], 
                                                                  Config, "_peer_keyEncipherment"),
     [{tls_config, #{server_config => ServerOpts,
                     client_config => ClientOpts}} |
@@ -405,8 +402,10 @@ digest() ->
     case application:get_env(ssl, protocol_version, application:get_env(ssl, dtls_protocol_version)) of
         Ver when Ver == 'tlsv1.2';
                  Ver == 'dtlsv1.2' ->
+            ct:pal(" ~p", [Ver]),
             {digest, sha256};
-        _ ->
+        Ver ->
+            ct:pal(" ~p", [Ver]),
             {digest, sha1}
     end.
 
