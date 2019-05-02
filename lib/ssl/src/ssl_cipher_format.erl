@@ -108,9 +108,15 @@ suite_map_to_openssl_str(#{key_exchange := any,
 suite_map_to_openssl_str(#{key_exchange := null} = Suite) ->
     %% TLS_EMPTY_RENEGOTIATION_INFO_SCSV
     suite_map_to_str(Suite);
+suite_map_to_openssl_str(#{key_exchange := rsa = Kex,
+                           cipher := Cipher,
+                           mac := Mac}) when Cipher == "des_cbc";
+                                             Cipher == "3des_ede_cbc" ->
+    openssl_cipher_name(Kex, string:to_upper(atom_to_list(Cipher))) ++
+        "-" ++ string:to_upper(atom_to_list(Mac));
 suite_map_to_openssl_str(#{key_exchange := Kex,
-                       cipher := chacha20_poly1305 = Cipher,
-                       mac := aead}) ->
+                           cipher := chacha20_poly1305 = Cipher,
+                           mac := aead}) ->
     openssl_suite_start(string:to_upper(atom_to_list(Kex))) 
         ++  openssl_cipher_name(Kex, string:to_upper(atom_to_list(Cipher)));
 suite_map_to_openssl_str(#{key_exchange := Kex,
@@ -165,7 +171,11 @@ suite_openssl_str_to_map("PSK-" ++ Rest) ->
 suite_openssl_str_to_map("SRP-RSA-" ++ Rest) ->
     suite_openssl_str_to_map("SRP-RSA", Rest);
 suite_openssl_str_to_map("SRP-" ++ Rest) ->
-    suite_openssl_str_to_map("SRP", Rest).
+    suite_openssl_str_to_map("SRP", Rest);
+suite_openssl_str_to_map("DES-CBC-SHA") ->
+    suite_str_to_map("TLS_RSA_WITH_DES_CBC_SHA");
+suite_openssl_str_to_map("DES-CBC3-SHA") ->
+    suite_str_to_map("TLS_RSA_WITH_3DES_EDE_CBC_SHA").
 
 %%--------------------------------------------------------------------
 -spec suite_bin_to_map(cipher_suite()) -> internal_erl_cipher_suite().
@@ -1765,7 +1775,8 @@ openssl_is_aead_cipher(CipherStr) ->
 algo_str_to_atom(AlgoStr) ->
     erlang:list_to_existing_atom(string:to_lower(AlgoStr)).
 
-
+openssl_cipher_name(_, "3DES_EDE_CBC" ++ _ = CipherStr) ->
+    "DES-CBC3";
 openssl_cipher_name(Kex, "AES_128_CBC" ++ _ = CipherStr) when Kex == rsa;
                                                               Kex == dhe_rsa;
                                                               Kex == ecdhe_rsa;
@@ -1828,6 +1839,10 @@ cipher_name_from_openssl("AES128-GCM") ->
     "AES_128_GCM";
 cipher_name_from_openssl("AES256-GCM") ->
     "AES_256_GCM";
+cipher_name_from_openssl("DES-CBC") ->
+    "DES_CBC";
+cipher_name_from_openssl("DES-CBC3") ->
+    "3DES_EDE_CBC";
 cipher_name_from_openssl("RC4") ->
     "RC4_128";
 cipher_name_from_openssl(Str) ->

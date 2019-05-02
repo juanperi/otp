@@ -1563,12 +1563,29 @@ fun(srp, Username :: string(), UserState :: term()) ->
         <p>Stops the SSL application.</p>
       </desc>
     </func>
+  
+    <func>
+      <name since="OTP 22.0" name="str_to_suite" arity="1" />
+      <fsummary>Returns the map representation of a cipher suite.</fsummary>
+      <desc>
+        <p>Returns the map representation of a cipher suite, handles both RFC and OpenSSL string names.
+	Returns an error if the cipher suite is not supported or the name is invalid.</p>
+      </desc>
+    </func>
+
+    <func>
+      <name since="OTP 22.0" name="suite_to_openssl_str" arity="1" />
+      <fsummary>Returns the OpenSSL string representation of a cipher suite.</fsummary>
+      <desc>
+        <p>Returns the OpenSSL representation of a cipher suite.</p>
+      </desc>
+    </func>
 
     <func>
       <name since="OTP 21.0" name="suite_to_str" arity="1" clause_i="1" />
-      <fsummary>Returns the string representation of a cipher suite.</fsummary>
+      <fsummary>Returns the RFC string representation of a cipher suite.</fsummary>
       <desc>
-        <p>Returns the string representation of a cipher suite.</p>
+        <p>Returns the RFC string representation of a cipher suite.</p>
       </desc>
     </func>
 

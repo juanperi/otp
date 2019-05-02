@@ -35,27 +35,68 @@
 -include("ssl_srp.hrl").
 
 %% Application handling
--export([start/0, start/1, stop/0, clear_pem_cache/0]).
+-export([start/0, 
+         start/1, 
+         stop/0, 
+         clear_pem_cache/0]).
 
 %% Socket handling
--export([connect/3, connect/2, connect/4,
-	 listen/2, transport_accept/1, transport_accept/2,
-	 handshake/1, handshake/2, handshake/3, handshake_continue/2,
-         handshake_continue/3, handshake_cancel/1,
-         ssl_accept/1, ssl_accept/2, ssl_accept/3,
-	 controlling_process/2, peername/1, peercert/1, sockname/1,
-	 close/1, close/2, shutdown/2, recv/2, recv/3, send/2,
-	 getopts/2, setopts/2, getstat/1, getstat/2
+-export([connect/3, 
+         connect/2, 
+         connect/4,
+	 listen/2, 
+         transport_accept/1, 
+         transport_accept/2,
+	 handshake/1, 
+         handshake/2, 
+         handshake/3, 
+         handshake_continue/2,
+         handshake_continue/3, 
+         handshake_cancel/1,
+         ssl_accept/1, 
+         ssl_accept/2, 
+         ssl_accept/3,
+	 controlling_process/2, 
+         peername/1, 
+         peercert/1, 
+         sockname/1,
+	 close/1, 
+         close/2, 
+         shutdown/2, 
+         recv/2, 
+         recv/3, 
+         send/2,
+	 getopts/2, 
+         setopts/2, 
+         getstat/1, 
+         getstat/2
 	]).
 
 %% SSL/TLS protocol handling
--export([cipher_suites/0, cipher_suites/1, cipher_suites/2, filter_cipher_suites/2,
-         prepend_cipher_suites/2, append_cipher_suites/2,
-         eccs/0, eccs/1, versions/0, groups/0, groups/1,
-         format_error/1, renegotiate/1, prf/5, negotiated_protocol/1, 
-	 connection_information/1, connection_information/2]).
+-export([cipher_suites/0, 
+         cipher_suites/1, 
+         cipher_suites/2, 
+         filter_cipher_suites/2,
+         prepend_cipher_suites/2, 
+         append_cipher_suites/2,
+         eccs/0, 
+         eccs/1, 
+         versions/0, 
+         groups/0, 
+         groups/1,
+         format_error/1, 
+         renegotiate/1, 
+         prf/5, 
+         negotiated_protocol/1, 
+	 connection_information/1, 
+         connection_information/2]).
 %% Misc
--export([handle_options/2, tls_version/1, new_ssl_options/3, suite_to_str/1]).
+-export([handle_options/2, 
+         tls_version/1, 
+         new_ssl_options/3, 
+         suite_to_str/1,
+         suite_to_openssl_str/1,
+         str_to_suite/1]).
 
 -deprecated({ssl_accept, 1, eventually}).
 -deprecated({ssl_accept, 2, eventually}).
@@ -1325,9 +1366,39 @@ tls_version({254, _} = Version) ->
 suite_to_str(Cipher) ->
     ssl_cipher_format:suite_map_to_str(Cipher).
 
+%%--------------------------------------------------------------------
+-spec suite_to_openssl_str(CipherSuite) -> string() when
+      CipherSuite :: erl_cipher_suite().                
+%%
+%% Description: Return the string representation of a cipher suite.
+%%--------------------------------------------------------------------
+suite_to_openssl_str(Cipher) ->
+    ssl_cipher_format:suite_map_to_openssl_str(Cipher).
+
+%%
+%%--------------------------------------------------------------------
+-spec str_to_suite(CipherSuiteName) -> erl_cipher_suite() when
+      CipherSuiteName :: string() | {error, {not_recognized, CipherSuiteName :: string()}}.
+%%
+%% Description: Return the map representation of a cipher suite.
+%%--------------------------------------------------------------------
+str_to_suite(CipherSuiteName) ->
+    try
+        %% Note in TLS-1.3 OpenSSL conforms to RFC names
+        %% so if CipherSuiteName starts with TLS this
+        %% function will call ssl_cipher_format:suite_str_to_map
+        %% so both RFC names and legacy OpenSSL names of supported
+        %% cipher suites will be handled
+        ssl_cipher_format:suite_openssl_str_to_map(CipherSuiteName)
+    catch
+        _:_ ->
+            {error, {not_recognized, CipherSuiteName}}
+    end.
+           
 %%%--------------------------------------------------------------
 %%% Internal functions
 %%%--------------------------------------------------------------------
+  
 %% Possible filters out suites not supported by crypto 
 available_suites(default) ->  
     Version = tls_record:highest_protocol_version([]),			  

@@ -56,3 +56,13 @@ tls_handshake_encoding(Config) when is_list(Config) ->
     %% manual test:  proper:quickcheck(ssl_eqc_handshake:prop_tls_hs_encode_decode()).
     true =  ct_property_test:quickcheck(ssl_eqc_handshake:prop_tls_hs_encode_decode(),
                                         Config).
+
+tls_cipher_suite_names(Config) when is_list(Config) ->
+    %% manual test:  proper:quickcheck(ssl_eqc_cipher_format:prop_tls_cipher_suite_rfc_name()).
+    true =  ct_property_test:quickcheck(ssl_eqc_cipher_format:prop_tls_cipher_suite_rfc_name(),
+                                        Config).
+
+tls_cipher_opensssl_suite_names(Config) when is_list(Config) ->
+    %% manual test:  proper:quickcheck(ssl_eqc_handshake:prop_tls_cipher_suite_openssl_name()).
+    true =  ct_property_test:quickcheck(ssl_eqc_handshake:prop_tls_cipher_suite_openssl_name(),
+                                        Config).
