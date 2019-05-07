@@ -50,7 +50,7 @@
 -export([encode_alert/3, send_alert/2, send_alert_in_connection/2, close/5, protocol_name/0]).
 
 %% Data handling
--export([next_record/1, socket/4, setopts/3, getopts/3]).
+-export([next_record/2, socket/4, setopts/3, getopts/3]).
 
 %% gen_statem state functions
 -export([init/3, error/3, downgrade/3, %% Initiation and take down states
@@ -106,47 +106,47 @@ pids(_) ->
 %%====================================================================
 %% State transition handling
 %%====================================================================	     
-next_record(#state{handshake_env = 
+next_record(_, #state{handshake_env = 
                        #handshake_env{unprocessed_handshake_events = N} = HsEnv} 
             = State) when N > 0 ->
     {no_record, State#state{handshake_env = 
                                 HsEnv#handshake_env{unprocessed_handshake_events = N-1}}};
-next_record(#state{protocol_buffers =
-		       #protocol_buffers{dtls_cipher_texts = [#ssl_tls{epoch = Epoch} = CT | Rest]}
-		   = Buffers,
-		   connection_states = #{current_read := #{epoch := Epoch}} = ConnectionStates} = State) ->
+next_record(StateName, #state{protocol_buffers =
+                                  #protocol_buffers{dtls_cipher_texts = [#ssl_tls{epoch = Epoch} = CT | Rest]}
+                              = Buffers,
+                              connection_states = #{current_read := #{epoch := Epoch}} = ConnectionStates} = State) ->
     CurrentRead = dtls_record:get_connection_state_by_epoch(Epoch, ConnectionStates, read),
     case dtls_record:replay_detect(CT, CurrentRead) of
         false ->
             decode_cipher_text(State#state{connection_states = ConnectionStates}) ;
         true ->
             %% Ignore replayed record
-            next_record(State#state{protocol_buffers =
-                                        Buffers#protocol_buffers{dtls_cipher_texts = Rest},
-                                    connection_states = ConnectionStates})
+            next_record(StateName, State#state{protocol_buffers =
+                                                   Buffers#protocol_buffers{dtls_cipher_texts = Rest},
+                                               connection_states = ConnectionStates})
     end;
-next_record(#state{protocol_buffers =
-		       #protocol_buffers{dtls_cipher_texts = [#ssl_tls{epoch = Epoch} | Rest]}
-		   = Buffers,
-		   connection_states = #{current_read := #{epoch := CurrentEpoch}} = ConnectionStates} = State) 
+next_record(StateName, #state{protocol_buffers =
+                                  #protocol_buffers{dtls_cipher_texts = [#ssl_tls{epoch = Epoch} | Rest]}
+                              = Buffers,
+                              connection_states = #{current_read := #{epoch := CurrentEpoch}} = ConnectionStates} = State) 
   when Epoch > CurrentEpoch ->
     %% TODO Buffer later Epoch message, drop it for now
-    next_record(State#state{protocol_buffers =
-                                Buffers#protocol_buffers{dtls_cipher_texts = Rest},
-                            connection_states = ConnectionStates});
-next_record(#state{protocol_buffers =
-		       #protocol_buffers{dtls_cipher_texts = [ _ | Rest]}
-		   = Buffers,
-		   connection_states = ConnectionStates} = State) ->
+    next_record(StateName, State#state{protocol_buffers =
+                                           Buffers#protocol_buffers{dtls_cipher_texts = Rest},
+                                       connection_states = ConnectionStates});
+next_record(StateName, #state{protocol_buffers =
+                                  #protocol_buffers{dtls_cipher_texts = [ _ | Rest]}
+                              = Buffers,
+                              connection_states = ConnectionStates} = State) ->
     %% Drop old epoch message
-    next_record(State#state{protocol_buffers =
+    next_record(StateName, State#state{protocol_buffers =
                                 Buffers#protocol_buffers{dtls_cipher_texts = Rest},
                             connection_states = ConnectionStates});
-next_record(#state{static_env = #static_env{role = server,
-                                            socket = {Listener, {Client, _}}}} = State) ->
+next_record(_, #state{static_env = #static_env{role = server,
+                                               socket = {Listener, {Client, _}}}} = State) ->
     dtls_packet_demux:active_once(Listener, Client, self()),
     {no_record, State};
-next_record(#state{static_env = #static_env{role = client,
+next_record(_, #state{static_env = #static_env{role = client,
                                             socket = {_Server, Socket} = DTLSSocket,
                                             close_tag = CloseTag,
                                             transport_cb = Transport}} = State) ->
@@ -157,7 +157,7 @@ next_record(#state{static_env = #static_env{role = client,
             self() ! {CloseTag, DTLSSocket},
 	    {no_record, State}
     end;
-next_record(State) ->
+next_record(_, State) ->
     {no_record, State}.
 
 next_event(StateName, Record, State) ->
@@ -165,7 +165,7 @@ next_event(StateName, Record, State) ->
 
 next_event(StateName, no_record,
 	   #state{connection_states = #{current_read := #{epoch := CurrentEpoch}}} = State0, Actions) ->
-    case next_record(State0) of
+    case next_record(StateName, State0) of
 	{no_record, State} ->
             ssl_connection:hibernate_after(StateName, State, Actions);
         {#ssl_tls{epoch = CurrentEpoch,
@@ -438,7 +438,7 @@ init({call, From}, {start, Timeout},
 			  session =
 			      Session0#session{session_id = Hello#client_hello.session_id},
 			  start_or_recv_from = From},
-    {Record, State} = next_record(State3),
+    {Record, State} = next_record(?FUNCTION_NAME, State3),
     next_event(hello, Record, State, [{{timeout, handshake}, Timeout, close} | Actions]);
 init({call, _} = Type, Event, #state{static_env = #static_env{role = server},
                                      protocol_specific = PS} = State) ->
@@ -498,7 +498,7 @@ hello(internal, #client_hello{cookie = <<>>,
     VerifyRequest = dtls_handshake:hello_verify_request(Cookie, ?HELLO_VERIFY_REQUEST_VERSION),
     State1 = prepare_flight(State0#state{connection_env = CEnv#connection_env{negotiated_version = Version}}),
     {State2, Actions} = send_handshake(VerifyRequest, State1),
-    {Record, State} = next_record(State2),
+    {Record, State} = next_record(?FUNCTION_NAME, State2),
     next_event(?FUNCTION_NAME, Record, 
                State#state{handshake_env = HsEnv#handshake_env{
                                              tls_handshake_history = 
@@ -702,7 +702,7 @@ connection(internal, #hello_request{}, #state{static_env = #static_env{host = Ho
     State1 = prepare_flight(State0),
     {State2, Actions} = send_handshake(Hello, State1#state{connection_env = CEnv#connection_env{negotiated_version = HelloVersion}}),
     {Record, State} =
-	next_record(
+	next_record(?FUNCTION_NAME,
 	  State2#state{protocol_specific = PS#{flight_state => initial_flight_state(DataTag)},
                        session = Session0#session{session_id
                                                   = Hello#client_hello.session_id}}),
@@ -820,9 +820,9 @@ next_dtls_record(Data, StateName, #state{protocol_buffers = #protocol_buffers{
                                       Buf0) of
 	{Records, Buf1} ->
 	    CT1 = CT0 ++ Records,
-	    next_record(State0#state{protocol_buffers =
-					 Buffers#protocol_buffers{dtls_record_buffer = Buf1,
-								  dtls_cipher_texts = CT1}});
+	    next_record(StateName, State0#state{protocol_buffers =
+                                                    Buffers#protocol_buffers{dtls_record_buffer = Buf1,
+                                                                             dtls_cipher_texts = CT1}});
 	#alert{} = Alert ->
 	    Alert
     end.
