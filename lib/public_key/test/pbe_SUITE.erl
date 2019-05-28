@@ -218,7 +218,10 @@ pbes2() ->
     [{doc,"Tests encode/decode EncryptedPrivateKeyInfo encrypted with different ciphers using PBES2"}].
 pbes2(Config) when is_list(Config) ->
     decode_encode_key_file("pbes2_des_cbc_enc_key.pem", "password", "DES-CBC", Config),
-    decode_encode_key_file("pbes2_des_ede3_cbc_enc_key.pem", "password", "DES-EDE3-CBC", Config),   
+    decode_encode_key_file("pbes2_des_ede3_cbc_enc_key.pem", "password", "DES-EDE3-CBC", Config),  
+    decode_encode_key_file("pbes2_aes_128_enc_key.pem", "password", "AES-128-CBC", Config),   
+    decode_encode_key_file("pbes2_aes_256_enc_key.pem", "password", "AES-192-CBC", Config),   
+    decode_encode_key_file("pbes2_aes_256_enc_key.pem", "password", "AES-256-CBC", Config),   
     case lists:member(rc2_cbc, proplists:get_value(ciphers, crypto:supports())) of
 	true ->
 	    decode_encode_key_file("pbes2_rc2_cbc_enc_key.pem", "password", "RC2-CBC", Config);

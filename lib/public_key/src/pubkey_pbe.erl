@@ -26,9 +26,7 @@
 -export([encode/4, decode/4, decrypt_parameters/1, encrypt_parameters/1]). 
 -export([pbdkdf1/4, pbdkdf2/7]).
 
--define(DEFAULT_SHA_MAC_KEYLEN, 20).
 -define(ASN1_OCTET_STR_TAG, 4).
--define(IV_LEN, 8).
 
 %%====================================================================
 %% Internal application API
@@ -42,15 +40,17 @@
 encode(Data, Password, "DES-CBC" = Cipher, KeyDevParams) ->
     {Key, IV} = password_to_key_and_iv(Password, Cipher, KeyDevParams),
     crypto:block_encrypt(des_cbc, Key, IV, pbe_pad(Data, KeyDevParams));
-
 encode(Data, Password, "DES-EDE3-CBC" = Cipher, KeyDevParams) ->
     {Key, IV} = password_to_key_and_iv(Password, Cipher, KeyDevParams),
     <<Key1:8/binary, Key2:8/binary, Key3:8/binary>> = Key,
     crypto:block_encrypt(des3_cbc, [Key1, Key2, Key3], IV, pbe_pad(Data));
-
 encode(Data, Password, "RC2-CBC" = Cipher, KeyDevParams) ->
     {Key, IV} = password_to_key_and_iv(Password, Cipher, KeyDevParams),
-    crypto:block_encrypt(rc2_cbc, Key, IV, pbe_pad(Data, KeyDevParams)).
+    crypto:block_encrypt(rc2_cbc, Key, IV, pbe_pad(Data, KeyDevParams));
+encode(Data, Password, Cipher, KeyDevParams) ->
+    {Key, IV} = password_to_key_and_iv(Password, Cipher, KeyDevParams),
+    crypto:block_encrypt(erlang:list_to_existing_atom(Cipher), Key, IV, pbe_pad(Data, KeyDevParams)).
+
 %%--------------------------------------------------------------------
 -spec decode(binary(), string(), string(), term()) -> binary().
 %%
@@ -59,21 +59,27 @@ encode(Data, Password, "RC2-CBC" = Cipher, KeyDevParams) ->
 decode(Data, Password,"DES-CBC"= Cipher, KeyDevParams) ->
     {Key, IV} = password_to_key_and_iv(Password, Cipher, KeyDevParams),
     crypto:block_decrypt(des_cbc, Key, IV, Data);
-
 decode(Data, Password,"DES-EDE3-CBC" = Cipher, KeyDevParams) ->
     {Key, IV} = password_to_key_and_iv(Password, Cipher, KeyDevParams),
     <<Key1:8/binary, Key2:8/binary, Key3:8/binary>> = Key,
     crypto:block_decrypt(des3_cbc, [Key1, Key2, Key3], IV, Data);
-
 decode(Data, Password,"RC2-CBC"= Cipher, KeyDevParams) ->
     {Key, IV} = password_to_key_and_iv(Password, Cipher, KeyDevParams),
     crypto:block_decrypt(rc2_cbc, Key, IV, Data);
-
+decode(Data, Password,"AES-128-CBC"= Cipher, #'PBES2-params'{} = KeyDevParams) ->
+    {Key, IV} = password_to_key_and_iv(Password, Cipher,  #'PBES2-params'{} =  KeyDevParams),
+    crypto:block_decrypt(aes_128_cbc, Key, IV, Data);
+decode(Data, Password,"AES-192_CBC"= Cipher,  #'PBES2-params'{} = KeyDevParams) ->
+    {Key, IV} = password_to_key_and_iv(Password, Cipher,  KeyDevParams),
+    crypto:block_decrypt(aes_192_cbc, Key, IV, Data);
+decode(Data, Password,"AES-256-CBC"= Cipher,  #'PBES2-params'{} = KeyDevParams) ->
+    {Key, IV} = password_to_key_and_iv(Password, Cipher, KeyDevParams),
+    crypto:block_decrypt(aes_256_cbc, Key, IV, Data);
 decode(Data, Password,"AES-128-CBC"= Cipher, IV) ->
     %% PKCS5_SALT_LEN is 8 bytes
     <<Salt:8/binary,_/binary>> = IV,
     {Key, _} = password_to_key_and_iv(Password, Cipher, Salt),
-    crypto:block_decrypt(aes_cbc128, Key, IV, Data).
+    crypto:block_decrypt(aes_128_cbc, Key, IV, Data).
 
 %%--------------------------------------------------------------------
 -spec pbdkdf1(string(), iodata(), integer(), atom()) -> binary().
@@ -150,17 +156,15 @@ do_pbdkdf1(Prev, Count, Acc, Hash) ->
     Result = crypto:hash(Hash, Prev),
     do_pbdkdf1(Result, Count-1 , <<Result/binary, Acc/binary>>, Hash).
 
-iv(#'PBES2-params_encryptionScheme'{algorithm = Algo,
-				    parameters = ASN1IV}) 
-  when (Algo == ?'desCBC') or
-       (Algo == ?'des-EDE3-CBC') ->
-    <<?ASN1_OCTET_STR_TAG, ?IV_LEN, IV:?IV_LEN/binary>> = decode_handle_open_type_wrapper(ASN1IV),
-    IV;
 iv(#'PBES2-params_encryptionScheme'{algorithm = ?'rc2CBC',
 				    parameters =  ASN1IV}) ->
     {ok, #'RC2-CBC-Parameter'{iv = IV}} 
 	= 'PKCS-FRAME':decode('RC2-CBC-Parameter', decode_handle_open_type_wrapper(ASN1IV)),
-    iolist_to_binary(IV).
+    iolist_to_binary(IV);
+iv(#'PBES2-params_encryptionScheme'{algorithm = _Algo,
+				    parameters = ASN1IV}) ->
+    <<?ASN1_OCTET_STR_TAG, Len:8/unsigned-big-integer, IV:Len/binary>> = decode_handle_open_type_wrapper(ASN1IV),
+    IV.
 
 blocks(1, N, Index, Password, Salt, Count, Prf, PrfHash, PrfLen, Acc) ->
     <<XorSum:N/binary, _/binary>> = xor_sum(Password, Salt, Count, Index, Prf, PrfHash, PrfLen),
@@ -247,13 +251,29 @@ key_derivation_params(#'PBES2-params'{keyDerivationFunc = KeyDerivationFunc,
 %% This function currently matches a tuple that ougth to be the value
 %% ?'id-hmacWithSHA1, but we need some kind of ASN1-fix for this.
 pseudo_random_function(#'PBKDF2-params_prf'{algorithm = 
-						{_,_, _,'id-hmacWithSHA1'}}) ->
-    {fun crypto:hmac/4, sha, pseudo_output_length(?'id-hmacWithSHA1')};
-pseudo_random_function(#'PBKDF2-params_prf'{algorithm = ?'id-hmacWithSHA1'}) ->
-    {fun crypto:hmac/4, sha, pseudo_output_length(?'id-hmacWithSHA1')}.
+						{_,_, _,'id-hmacWithSHA1' = Algo}}) ->
+    {fun crypto:hmac/4, sha, pseudo_output_length(Algo)};
+pseudo_random_function(#'PBKDF2-params_prf'{algorithm = ?'id-hmacWithSHA1' = Algo}) ->
+    {fun crypto:hmac/4, sha, pseudo_output_length(Algo)};
+pseudo_random_function(#'PBKDF2-params_prf'{algorithm = ?'id-hmacWithSHA224'= Algo}) ->
+    {fun crypto:hmac/4, sha224, pseudo_output_length(Algo)};
+pseudo_random_function(#'PBKDF2-params_prf'{algorithm = ?'id-hmacWithSHA256' = Algo}) ->
+    {fun crypto:hmac/4, sha256,  pseudo_output_length(Algo)};
+pseudo_random_function(#'PBKDF2-params_prf'{algorithm = ?'id-hmacWithSHA384' = Algo}) ->
+    {fun crypto:hmac/4, sha384,  pseudo_output_length(Algo)};
+pseudo_random_function(#'PBKDF2-params_prf'{algorithm = ?'id-hmacWithSHA512' = Algo}) ->
+    {fun crypto:hmac/4, sha512,  pseudo_output_length(Algo)}.                 
 
 pseudo_output_length(?'id-hmacWithSHA1') ->
-    ?DEFAULT_SHA_MAC_KEYLEN.
+    20; %%160/8
+pseudo_output_length(?'id-hmacWithSHA224') ->
+    28; %%%224/8
+pseudo_output_length(?'id-hmacWithSHA256') ->
+    32; %%256/8
+pseudo_output_length(?'id-hmacWithSHA384') ->
+    48; %%384/8
+pseudo_output_length(?'id-hmacWithSHA512') ->
+    64. %%512/8
 
 derived_key_length(_, Len) when is_integer(Len) ->
     Len;
@@ -266,9 +286,23 @@ derived_key_length(Cipher,_) when (Cipher == ?'rc2CBC') or
 derived_key_length(Cipher,_) when (Cipher == ?'des-EDE3-CBC') or 
 				  (Cipher == "DES-EDE3-CBC") ->
     24;
-derived_key_length(Cipher,_) when (Cipher == "AES-128-CBC") ->
-    16.
+derived_key_length(Cipher,_) when (Cipher == "AES-128-CBC");
+                                  (Cipher == ?'id-aes128-CBC') ->
+    16;
+derived_key_length(Cipher,_) when (Cipher == "AES-192-CBC");
+                                  (Cipher == ?'id-aes192-CBC') ->
+    24;
 
+derived_key_length(Cipher,_) when (Cipher == "AES-256-CBC");
+                                  (Cipher == ?'id-aes256-CBC') ->
+    32.
+
+cipher(#'PBES2-params_encryptionScheme'{algorithm = ?'id-aes128-CBC'}) ->
+    "AES-128-CBC";
+cipher(#'PBES2-params_encryptionScheme'{algorithm = ?'id-aes192-CBC'}) ->
+    "AES-192-CBC";
+cipher(#'PBES2-params_encryptionScheme'{algorithm = ?'id-aes256-CBC'}) ->
+    "AES-256-CBC";
 cipher(#'PBES2-params_encryptionScheme'{algorithm = ?'desCBC'}) ->
     "DES-CBC";
 cipher(#'PBES2-params_encryptionScheme'{algorithm = ?'des-EDE3-CBC'}) ->
