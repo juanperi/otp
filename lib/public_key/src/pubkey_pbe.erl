@@ -47,9 +47,15 @@ encode(Data, Password, "DES-EDE3-CBC" = Cipher, KeyDevParams) ->
 encode(Data, Password, "RC2-CBC" = Cipher, KeyDevParams) ->
     {Key, IV} = password_to_key_and_iv(Password, Cipher, KeyDevParams),
     crypto:block_encrypt(rc2_cbc, Key, IV, pbe_pad(Data, KeyDevParams));
-encode(Data, Password, Cipher, KeyDevParams) ->
+encode(Data, Password, "AES-128-CBC" = Cipher, KeyDevParams) ->
     {Key, IV} = password_to_key_and_iv(Password, Cipher, KeyDevParams),
-    crypto:block_encrypt(erlang:list_to_existing_atom(Cipher), Key, IV, pbe_pad(Data, KeyDevParams)).
+    crypto:block_encrypt(aes_128_cbc, Key, IV, pbe_pad(Data, KeyDevParams));
+encode(Data, Password, "AES-192-CBC" = Cipher, KeyDevParams) ->
+    {Key, IV} = password_to_key_and_iv(Password, Cipher, KeyDevParams),
+    crypto:block_encrypt(aes_192_cbc, Key, IV, pbe_pad(Data, KeyDevParams));
+encode(Data, Password, "AES-256-CBC"= Cipher, KeyDevParams) ->
+    {Key, IV} = password_to_key_and_iv(Password, Cipher, KeyDevParams),
+    crypto:block_encrypt(aes_256_cbc, Key, IV, pbe_pad(Data, KeyDevParams)).
 
 %%--------------------------------------------------------------------
 -spec decode(binary(), string(), string(), term()) -> binary().
@@ -69,7 +75,7 @@ decode(Data, Password,"RC2-CBC"= Cipher, KeyDevParams) ->
 decode(Data, Password,"AES-128-CBC"= Cipher, #'PBES2-params'{} = KeyDevParams) ->
     {Key, IV} = password_to_key_and_iv(Password, Cipher,  #'PBES2-params'{} =  KeyDevParams),
     crypto:block_decrypt(aes_128_cbc, Key, IV, Data);
-decode(Data, Password,"AES-192_CBC"= Cipher,  #'PBES2-params'{} = KeyDevParams) ->
+decode(Data, Password,"AES-192-CBC"= Cipher,  #'PBES2-params'{} = KeyDevParams) ->
     {Key, IV} = password_to_key_and_iv(Password, Cipher,  KeyDevParams),
     crypto:block_decrypt(aes_192_cbc, Key, IV, Data);
 decode(Data, Password,"AES-256-CBC"= Cipher,  #'PBES2-params'{} = KeyDevParams) ->

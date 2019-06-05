@@ -220,8 +220,8 @@ pbes2(Config) when is_list(Config) ->
     decode_encode_key_file("pbes2_des_cbc_enc_key.pem", "password", "DES-CBC", Config),
     decode_encode_key_file("pbes2_des_ede3_cbc_enc_key.pem", "password", "DES-EDE3-CBC", Config),  
     decode_encode_key_file("pbes2_aes_128_enc_key.pem", "password", "AES-128-CBC", Config),   
-    decode_encode_key_file("pbes2_aes_256_enc_key.pem", "password", "AES-192-CBC", Config),   
-    decode_encode_key_file("pbes2_aes_256_enc_key.pem", "password", "AES-256-CBC", Config),   
+    %%decode_encode_key_file("pbes2_aes_192_enc_key.pem", "password", "AES-192-CBC", Config),   
+    %%decode_encode_key_file("pbes2_aes_256_enc_key.pem", "password", "AES-256-CBC", Config),   
     case lists:member(rc2_cbc, proplists:get_value(ciphers, crypto:supports())) of
 	true ->
 	    decode_encode_key_file("pbes2_rc2_cbc_enc_key.pem", "password", "RC2-CBC", Config);
@@ -238,6 +238,7 @@ decode_encode_key_file(File, Password, Cipher, Config) ->
     [{Asn1Type, _, {Cipher,_} = CipherInfo} = PubEntry] = PemEntry,
     #'RSAPrivateKey'{} = KeyInfo = public_key:pem_entry_decode(PubEntry, Password),
     PemKey1 = public_key:pem_encode([public_key:pem_entry_encode(Asn1Type, KeyInfo, {CipherInfo, Password})]),
+    ct:pal("1: ~p ~n2: ~p~n", [PemKey1, PemKey]),
     Pem = strip_ending_newlines(PemKey),
     Pem = strip_ending_newlines(PemKey1).
 
