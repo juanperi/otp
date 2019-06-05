@@ -27,6 +27,8 @@
 -export([pbdkdf1/4, pbdkdf2/7]).
 
 -define(ASN1_OCTET_STR_TAG, 4).
+-define(IV_LEN, 8).
+-define(AES_IV_LEN, 16).
 
 %%====================================================================
 %% Internal application API
@@ -167,9 +169,24 @@ iv(#'PBES2-params_encryptionScheme'{algorithm = ?'rc2CBC',
     {ok, #'RC2-CBC-Parameter'{iv = IV}} 
 	= 'PKCS-FRAME':decode('RC2-CBC-Parameter', decode_handle_open_type_wrapper(ASN1IV)),
     iolist_to_binary(IV);
-iv(#'PBES2-params_encryptionScheme'{algorithm = _Algo,
-				    parameters = ASN1IV}) ->
-    <<?ASN1_OCTET_STR_TAG, Len:8/unsigned-big-integer, IV:Len/binary>> = decode_handle_open_type_wrapper(ASN1IV),
+iv(#'PBES2-params_encryptionScheme'{algorithm = Algo,
+				    parameters = ASN1IV}) 
+  when (Algo == ?'desCBC') or
+       (Algo == ?'des-EDE3-CBC') ->
+    <<?ASN1_OCTET_STR_TAG, ?IV_LEN, IV:?IV_LEN/binary>> = decode_handle_open_type_wrapper(ASN1IV),
+    IV;
+iv(#'PBES2-params_encryptionScheme'{algorithm = Algo,
+				    parameters = ASN1IV}) 
+  when (Algo == ?'desCBC') or
+       (Algo == ?'des-EDE3-CBC') ->
+    <<?ASN1_OCTET_STR_TAG, ?IV_LEN, IV:?IV_LEN/binary>> = decode_handle_open_type_wrapper(ASN1IV),
+    IV;
+iv(#'PBES2-params_encryptionScheme'{algorithm = Algo,
+				    parameters = ASN1IV}) 
+  when (Algo == ?'id-aes128-CBC') or
+       (Algo == ?'id-aes192-CBC') or
+       (Algo == ?'id-aes256-CBC') ->
+    <<?ASN1_OCTET_STR_TAG, ?AES_IV_LEN, IV:?AES_IV_LEN/binary>> = decode_handle_open_type_wrapper(ASN1IV),
     IV.
 
 blocks(1, N, Index, Password, Salt, Count, Prf, PrfHash, PrfLen, Acc) ->
