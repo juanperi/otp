@@ -71,17 +71,17 @@ all_protocol_groups() ->
      {group, error_handling}].
 
 tests() ->
-    [verify_peer,
-     verify_none,
-     server_require_peer_cert_ok,
-     server_require_peer_cert_fail,
-     server_require_peer_cert_empty_ok,
-     server_require_peer_cert_partial_chain,
-     server_require_peer_cert_allow_partial_chain,
-     server_require_peer_cert_do_not_allow_partial_chain,
-     server_require_peer_cert_partial_chain_fun_fail,
-     verify_fun_always_run_client,
-     verify_fun_always_run_server,
+    [%% verify_peer, %% auth
+     %% verify_none, %% no_auth
+     %% server_require_peer_cert_ok, %% client_auth
+     %% server_require_peer_cert_fail, %% client_auth_empty_cert_rejected
+     %% server_require_peer_cert_empty_ok, %% client_auth_empty_cert_accepted
+     %% server_require_peer_cert_partial_chain,
+     %% server_require_peer_cert_allow_partial_chain,
+     %% server_require_peer_cert_do_not_allow_partial_chain,
+     %% server_require_peer_cert_partial_chain_fun_fail,
+     %% verify_fun_always_run_client,
+     %% verify_fun_always_run_server,
      cert_expired,
      invalid_signature_client,
      invalid_signature_server,

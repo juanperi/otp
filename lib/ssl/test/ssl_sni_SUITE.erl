@@ -236,7 +236,8 @@ dns_name_reuse(Config) ->
                                          {mfa, {ssl_test_lib, session_info_result, []}},
                                          {from, self()},  {options, [{verify, verify_peer} | ClientConf]}]),
     
-    ssl_test_lib:check_client_alert(Client1, handshake_failure).
+    ssl_test_lib:check_client_alert(Client1, handshake_failure),
+    ssl_test_lib:close(Client0).
 
 %%--------------------------------------------------------------------
 %% Internal Functions ------------------------------------------------
