@@ -83,8 +83,8 @@ tests() ->
      %% verify_fun_always_run_client,
      %% verify_fun_always_run_server,
      cert_expired,
-     invalid_signature_client,
-     invalid_signature_server,
+     %invalid_signature_client,
+     %%invalid_signature_server,
      extended_key_usage_verify_both,
      extended_key_usage_verify_server,
      critical_extension_verify_client,
@@ -97,10 +97,10 @@ tests() ->
 
 error_handling_tests()->
     [client_with_cert_cipher_suites_handshake,
-     server_verify_no_cacerts,
-     unknown_server_ca_fail,
-     unknown_server_ca_accept_verify_none,
-     unknown_server_ca_accept_verify_peer,
+     %%server_verify_no_cacerts,
+     %% unknown_server_ca_fail,
+     %% unknown_server_ca_accept_verify_none,
+     %% unknown_server_ca_accept_verify_peer,
      unknown_server_ca_accept_backwardscompatibility,
      no_authority_key_identifier,
      no_authority_key_identifier_keyEncipherment].

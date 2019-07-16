@@ -24,6 +24,7 @@
 %% Note: This directive should only be used in test suites.
 -compile(export_all).
 -include_lib("common_test/include/ct.hrl").
+-include_lib("public_key/include/public_key.hrl").
 
 %%--------------------------------------------------------------------
 %% Common Test interface functions -----------------------------------
@@ -88,7 +89,13 @@ all_version_tests() ->
      client_auth_partial_chain,
      client_auth_allow_partial_chain,
      client_auth_do_not_allow_partial_chain,
-     client_auth_partial_chain_fun_fail
+     client_auth_partial_chain_fun_fail,
+     missing_root_cert_no_auth,
+     missing_root_cert_auth,
+     missing_root_cert_auth_user_verify_fun_accept,
+     missing_root_cert_auth_user_verify_fun_reject,
+     missing_root_certs_server,
+     invalid_signature_client
     ].
 
 init_per_suite(Config) ->
@@ -193,17 +200,7 @@ auth(Config) ->
     ServerOpts =  [{verify, verify_peer} | ssl_test_lib:ssl_options(server_cert_opts, Config)],
     
     ssl_test_lib:basic_test(ClientOpts, ServerOpts, Config).
-%%--------------------------------------------------------------------
-client_auth() ->
-    [{doc, "Test client authentication."}].
 
-client_auth(Config) ->
-    ClientOpts = ssl_test_lib:ssl_options(client_cert_opts, Config),
-    ServerOpts0 = ssl_test_lib:ssl_options(server_cert_opts, Config),
-    ServerOpts = [{verify, verify_peer},
-                  {fail_if_no_peer_cert, true} | ServerOpts0],
-    
-    ssl_test_lib:basic_test(ClientOpts, ServerOpts, Config).
 %%--------------------------------------------------------------------
 client_auth_empty_cert_accepted() ->
     [{doc,"Test client authentication when client sends an empty certificate and " 
@@ -372,6 +369,129 @@ verify_fun_always_run_server(Config) when is_list(Config) ->
     ssl_test_lib:basic_alert(ClientOpts, ServerOpts, Config, handshake_failure).
 
 %%--------------------------------------------------------------------
+missing_root_cert_no_auth() ->
+     [{doc,"Test that the client succeds if the ROOT CA is unknown in verify_none mode"}].
+
+missing_root_cert_no_auth(Config) ->
+    ClientOpts = [{verify, verify_none} | ssl_test_lib:ssl_options(client_cert_opts, Config)],
+    ServerOpts =  [{verify, verify_none} | ssl_test_lib:ssl_options(server_cert_opts, Config)],
+    
+    ssl_test_lib:basic_test(ClientOpts, ServerOpts, Config).
+
+%%--------------------------------------------------------------------
+missing_root_cert_auth() ->
+    [{doc, "Test that the client fails if the ROOT CA is unknown in verify_peer mode"}].
+
+missing_root_cert_auth(Config) ->
+    ClientOpts = ssl_test_lib:ssl_options([{verify, verify_peer}]),
+    ServerOpts0 = ssl_test_lib:ssl_options(server_cert_opts, Config),
+    ServerOpts = [{verify, none} | ServerOpts0],
+    
+    ssl_test_lib:basic_alert(ClientOpts, ServerOpts, Config, unknown_ca).
+
+%%--------------------------------------------------------------------
+missing_root_cert_auth_user_verify_fun_accept() ->
+    [{doc, "Test that the client succeds if the ROOT CA is unknown in verify_peer mode"
+     " with a verify_fun that accepts the unknown CA error"}].
+
+missing_root_cert_auth_user_verify_fun_accept(Config) ->
+    ServerOpts = ssl_test_lib:ssl_options(server_cert_opts, Config),
+    FunAndState =  {fun(_,{bad_cert, unknown_ca}, UserState) ->
+			    {valid, UserState};
+		       (_,{bad_cert, _} = Reason, _) ->
+			    {fail, Reason};
+		       (_,{extension, _}, UserState) ->
+			    {unknown, UserState};
+		       (_, valid, UserState) ->
+			    {valid, UserState};
+		       (_, valid_peer, UserState) ->
+			    {valid, UserState}
+		    end, []},
+    ClientOpts = [{verify, verify_peer},
+                  {verify_fun, FunAndState}],
+    ssl_test_lib:basic_test(ClientOpts, ServerOpts, Config).
+%%--------------------------------------------------------------------
+missing_root_cert_auth_user_verify_fun_reject() ->
+    [{doc, "Test that the client fails if the ROOT CA is unknown in verify_peer mode"
+     " with a verify_fun that rejects the unknown CA error"}].
+
+missing_root_cert_auth_user_verify_fun_reject(Config) ->
+    ServerOpts = ssl_test_lib:ssl_options(server_cert_opts, Config),
+    FunAndState =  {fun(_,{bad_cert, unknown_ca} = Reason, _UserState) ->
+			    {fail, Reason};
+		       (_,{bad_cert, _} = Reason, _) ->
+			    {fail, Reason};
+		       (_,{extension, UserState}, _) ->
+			    {unknown, UserState};
+		       (_, valid, UserState) ->
+			    {valid, UserState};
+		       (_, valid_peer, UserState) ->
+			    {valid, UserState}
+		    end, []},
+    ClientOpts = [{verify, verify_peer},
+                  {verify_fun, FunAndState}],
+    ssl_test_lib:basic_alert(ClientOpts, ServerOpts, Config, unknown_ca).
+%%--------------------------------------------------------------------
+missing_root_certs_server() ->
+    [{doc,"Test server must have cacerts if it wants to verify client"}].
+missing_root_certs_server(Config) when is_list(Config) ->
+    ServerOpts =  proplists:delete(cacertfile, ssl_test_lib:ssl_options(server_rsa_opts, Config)),
+    {_, ServerNode, _} = ssl_test_lib:run_where(Config),
+    Server = ssl_test_lib:start_server_error([{node, ServerNode}, {port, 0},
+					      {from, self()},
+					      {options, [{verify, verify_peer}
+							 | ServerOpts]}]),
+
+    ssl_test_lib:check_result(Server, {error, {options, {cacertfile, ""}}}).
+
+%%--------------------------------------------------------------------
+invalid_signature_client() ->
+    [{doc,"Test server with invalid signature"}].
+
+invalid_signature_client(Config) when is_list(Config) ->
+    ClientOpts0 = ssl_test_lib:ssl_options(client_cert_opts, Config),
+    ServerOpts0 = ssl_test_lib:ssl_options(server_cert_opts, Config),
+    PrivDir = proplists:get_value(priv_dir, Config),
+
+    KeyFile =  proplists:get_value(keyfile, ClientOpts0),
+    [KeyEntry] = ssl_test_lib:pem_to_der(KeyFile),
+    Key = ssl_test_lib:public_key(public_key:pem_entry_decode(KeyEntry)),
+
+    ClientCertFile = proplists:get_value(certfile, ClientOpts0),
+    NewClientCertFile = filename:join(PrivDir, "client_invalid_cert.pem"),
+    [{'Certificate', ClientDerCert, _}] = ssl_test_lib:pem_to_der(ClientCertFile),
+    ClientOTPCert = public_key:pkix_decode_cert(ClientDerCert, otp),
+    ClientOTPTbsCert = ClientOTPCert#'OTPCertificate'.tbsCertificate,
+    NewClientDerCert = public_key:pkix_sign(ClientOTPTbsCert, Key),
+    ssl_test_lib:der_to_pem(NewClientCertFile, [{'Certificate', NewClientDerCert, not_encrypted}]),
+    ClientOpts = [{certfile, NewClientCertFile} | proplists:delete(certfile, ClientOpts0)],
+    ServerOpts = [{verify, verify_peer} | ServerOpts0],
+    ssl_test_lib:basic_alert(ClientOpts, ServerOpts, unknown_ca).
+%%--------------------------------------------------------------------
+invalid_signature_server() ->
+    [{doc,"Test client with invalid signature"}].
+
+invalid_signature_server(Config) when is_list(Config) ->
+    ClientOpts0 = ssl_test_lib:ssl_options(client_cert_opts, Config),
+    ServerOpts0 = ssl_test_lib:ssl_options(server_cert_opts, Config),
+    PrivDir = proplists:get_value(priv_dir, Config),
+
+    KeyFile =  proplists:get_value(keyfile, ServerOpts0),
+    [KeyEntry] = ssl_test_lib:pem_to_der(KeyFile),
+    Key = ssl_test_lib:public_key(public_key:pem_entry_decode(KeyEntry)),
+
+    ServerCertFile = proplists:get_value(certfile, ServerOpts0),
+    NewServerCertFile = filename:join(PrivDir, "server_invalid_cert.pem"),
+    [{'Certificate', ServerDerCert, _}] = ssl_test_lib:pem_to_der(ServerCertFile),
+    ServerOTPCert = public_key:pkix_decode_cert(ServerDerCert, otp),
+    ServerOTPTbsCert = ServerOTPCert#'OTPCertificate'.tbsCertificate,
+    NewServerDerCert = public_key:pkix_sign(ServerOTPTbsCert, Key),
+    ssl_test_lib:der_to_pem(NewServerCertFile, [{'Certificate', NewServerDerCert, not_encrypted}]),
+    ServerOpts = [{certfile, NewServerCertFile} | proplists:delete(certfile, ServerOpts0)],
+    ClientOpts = [{verify, verify_peer} | ClientOpts0],
+    ssl_test_lib:basic_alert(ClientOpts, ServerOpts, unknown_ca).
+   
+%%--------------------------------------------------------------------
 %% TLS 1.3 Test Cases --------------------------------------------------------
 %%--------------------------------------------------------------------
 
@@ -478,3 +598,9 @@ hello_retry_client_auth_empty_cert_rejected(Config) ->
     ssl_test_lib:basic_alert(ClientOpts, ServerOpts, Config, certificate_required).
 
     
+%%--------------------------------------------------------------------
+%% Internal functions  -----------------------------------------------
+%%--------------------------------------------------------------------
+
+make_cert_chains(rsa, ChainConf, Config, Suffix) ->
+     ssl_test_lib:make_rsa_cert_chains()
