@@ -134,15 +134,20 @@ init_per_group(Group, Config0) when Group == rsa;
                            end, Version), 
     case Ciphers of
         [_|_] ->
-            [{client_cert_opts, [{ciphers, Ciphers} | COpts]}, {server_cert_opts, SOpts} | 
-             lists:delete(server_cert_opts, lists:delete(client_cert_opts, Config))];
+            [{cert_key_alg, rsa} |
+             lists:delete(cert_key_alg,                                 
+                          [{client_cert_opts, [{ciphers, Ciphers} | COpts]}, 
+                           {server_cert_opts, SOpts} | 
+                           lists:delete(server_cert_opts, 
+                                        lists:delete(client_cert_opts, Config))])];
         [] ->
             {skip, {no_sup, Group, Version}}
     end;
 init_per_group(Group, Config0) when Group == ecdsa;
                                     Group == ecdsa_1_3 ->
     PKAlg = crypto:supports(public_keys),
-    case lists:member(ecdsa, PKAlg) andalso (lists:member(ecdh, PKAlg) orelse lists:member(dh, PKAlg)) of
+    case lists:member(ecdsa, PKAlg) andalso (lists:member(ecdh, PKAlg) orelse 
+                                             lists:member(dh, PKAlg)) of
         true ->
             Config = ssl_test_lib:make_ecdsa_cert(Config0),
             COpts = proplists:get_value(client_ecdsa_opts, Config),
@@ -158,8 +163,13 @@ init_per_group(Group, Config0) when Group == ecdsa;
                                     end, Version), 
             case Ciphers of
                 [_|_] ->
-                    [{client_cert_opts, [{ciphers, Ciphers} | COpts]}, {server_cert_opts, SOpts} | 
-                     lists:delete(server_cert_opts, lists:delete(client_cert_opts, Config))];
+                    [{cert_key_alg, ecdsa} |
+                     lists:delete(cert_key_alg,
+                                  [{client_cert_opts, [{ciphers, Ciphers} | COpts]}, 
+                                   {server_cert_opts, SOpts} | 
+                                   lists:delete(server_cert_opts, 
+                                                lists:delete(client_cert_opts, Config))]
+                                 )]
                 [] ->
                     {skip, {no_sup, Group, Version}}
             end;
@@ -184,8 +194,12 @@ init_per_group(Group, Config0) when Group == dsa ->
                                     end, Version), 
             case Ciphers of
                 [_|_] ->
-                    [{client_cert_opts, [{ciphers, Ciphers} | COpts]}, {server_cert_opts, SOpts} | 
-                     lists:delete(server_cert_opts, lists:delete(client_cert_opts, Config))];
+                    [{cert_key_alg, dsa} |
+                     lists:delete(cert_key_alg,
+                                  [{client_cert_opts, [{ciphers, Ciphers} | COpts]}, 
+                                   {server_cert_opts, SOpts} | 
+                                   lists:delete(server_cert_opts, 
+                                                lists:delete(client_cert_opts, Config))])];
                 [] ->
                     {skip, {no_sup, Group, Version}}
             end;
