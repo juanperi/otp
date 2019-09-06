@@ -30,7 +30,7 @@
 -include("ssl_api.hrl").
 
 %% Internal application API
--export([is_new/2, client_id/4, server_id/6, valid_session/2]).
+-export([is_new/2, client_select_session/4, server_id/6, valid_session/2]).
 
 -type seconds()   :: integer(). 
 
@@ -48,25 +48,25 @@ is_new(_ClientSuggestion, _ServerDecision) ->
     true.
 
 %%--------------------------------------------------------------------
--spec client_id({ssl:host(), inet:port_number(), ssl_options()}, db_handle(), atom(),
-	 undefined | binary()) -> binary().
+-spec client_select_session({ssl:host(), inet:port_number(), map()}, db_handle(), atom(),
+	 #session{}) -> #session{}.
 %%
 %% Description: Should be called by the client side to get an id
 %%              for the client hello message.
 %%--------------------------------------------------------------------
-client_id({Host, Port, #{reuse_session := SessionId}}, Cache, CacheCb, _) when is_binary(SessionId)->
+client_select_session({Host, Port, #{reuse_session := SessionId}}, Cache, CacheCb, NewSession) when is_binary(SessionId)->
     case CacheCb:lookup(Cache, {{Host, Port}, SessionId}) of
         undefined ->
-	    <<>>;
-	#session{} ->
-	    SessionId
+	    NewSession#session{session_id = <<>>};
+	#session{} = Session->
+	    Session
     end;
-client_id(ClientInfo, Cache, CacheCb, OwnCert) ->
+client_select_session(ClientInfo, Cache, CacheCb, #session{own_certificate = OwnCert} = NewSession) ->
     case select_session(ClientInfo, Cache, CacheCb, OwnCert) of
 	no_session ->
-	    <<>>;
-	SessionId ->
-	    SessionId
+            NewSession#session{session_id = <<>>};
+	Session ->
+	    Session
     end.
 
 -spec valid_session(#session{}, seconds() | {invalidate_before, integer()}) -> boolean().
@@ -100,7 +100,7 @@ server_id(Port, SuggestedId, Options, Cert, Cache, CacheCb) ->
 %%% Internal functions
 %%--------------------------------------------------------------------
 select_session({_, _, #{reuse_sessions := Reuse}}, _Cache, _CacheCb, _OwnCert) when Reuse =/= true ->
-    %% If reuse_sessions == true | save a new session should be created
+    %% If reuse_sessions == false | save a new session should be created
     no_session;
 select_session({HostIP, Port, SslOpts}, Cache, CacheCb, OwnCert) ->
     Sessions = CacheCb:select_session(Cache, {HostIP, Port}),
@@ -117,7 +117,7 @@ select_session(Sessions, #{ciphers := Ciphers}, OwnCert) ->
  	end,
     case lists:dropwhile(IsNotResumable, Sessions) of
 	[] ->   no_session;
-	[Session | _] -> Session#session.session_id
+	[Session | _] -> Session
     end.
 
 is_resumable(_, _, #{reuse_sessions := false}, _, _, _, _) ->
