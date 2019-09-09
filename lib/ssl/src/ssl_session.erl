@@ -30,7 +30,7 @@
 -include("ssl_api.hrl").
 
 %% Internal application API
--export([is_new/2, client_select_session/4, server_id/6, valid_session/2]).
+-export([is_new/2, client_select_session/4, server_select_session/7, valid_session/2]).
 
 -type seconds()   :: integer(). 
 
@@ -61,28 +61,27 @@ client_select_session({Host, Port, #{reuse_session := SessionId}}, Cache, CacheC
 	#session{} = Session->
 	    Session
     end;
-client_select_session(ClientInfo, Cache, CacheCb, #session{own_certificate = OwnCert} = NewSession) ->
+client_select_session(ClientInfo, 
+                      Cache, CacheCb, #session{own_certificate = OwnCert} = NewSession) ->
     case select_session(ClientInfo, Cache, CacheCb, OwnCert) of
-	no_session ->
+        no_session ->
             NewSession#session{session_id = <<>>};
-	Session ->
-	    Session
+        Session ->
+            Session
     end.
 
--spec valid_session(#session{}, seconds() | {invalidate_before, integer()}) -> boolean().
-%%
-%% Description: Check that the session has not expired
 %%--------------------------------------------------------------------
-valid_session(#session{time_stamp = TimeStamp}, {invalidate_before, Before}) ->
-    TimeStamp > Before;
-valid_session(#session{time_stamp = TimeStamp}, LifeTime) ->
-    Now = erlang:monotonic_time(),
-    Lived = erlang:convert_time_unit(Now-TimeStamp, native, seconds),
-    Lived < LifeTime.
-
-server_id(Port, <<>>, _SslOpts, _Cert, _, _) ->
+-spec server_select_session(ssl_record:version(), inet:port_number(), binary(), map(), 
+                            binary(),db_handle(), atom())  -> {binary(), #session{} | undefined}. 
+%%
+%% Description: Should be called by the server side to get an id
+%%              for the client hello message.
+%%--------------------------------------------------------------------
+server_select_session({_, Minor}, Port, <<>>, _SslOpts, _Cert, _, _) when Minor >= 4 ->
     {ssl_manager:new_session_id(Port), undefined};
-server_id(Port, SuggestedId, Options, Cert, Cache, CacheCb) ->
+server_select_session(_, Port, <<>>, _SslOpts, _Cert, _, _) ->
+    {ssl_manager:new_session_id(Port), undefined};
+server_select_session(_, Port, SuggestedId, Options, Cert, Cache, CacheCb) ->
     LifeTime = case application:get_env(ssl, session_lifetime) of
 		   {ok, Time} when is_integer(Time) -> Time;
 		   _ -> ?'24H_in_sec'
@@ -96,9 +95,20 @@ server_id(Port, SuggestedId, Options, Cert, Cache, CacheCb) ->
 	    {ssl_manager:new_session_id(Port), undefined}
     end.
 
+-spec valid_session(#session{}, seconds() | {invalidate_before, integer()}) -> boolean().
+%%
+%% Description: Check that the session has not expired
+%%--------------------------------------------------------------------
+valid_session(#session{time_stamp = TimeStamp}, {invalidate_before, Before}) ->
+    TimeStamp > Before;
+valid_session(#session{time_stamp = TimeStamp}, LifeTime) ->
+    Now = erlang:monotonic_time(),
+    Lived = erlang:convert_time_unit(Now-TimeStamp, native, seconds),
+    Lived < LifeTime.
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
+
 select_session({_, _, #{reuse_sessions := Reuse}}, _Cache, _CacheCb, _OwnCert) when Reuse =/= true ->
     %% If reuse_sessions == false | save a new session should be created
     no_session;

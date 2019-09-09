@@ -785,9 +785,10 @@ hello_retry_request(Config) ->
     ClientOpts0 = ssl_test_lib:ssl_options(client_cert_opts, Config),
     ServerOpts0 = ssl_test_lib:ssl_options(server_cert_opts, Config),
     ServerOpts = [{versions, ['tlsv1.2','tlsv1.3']},
-                  {supported_groups, [x448, x25519]}|ServerOpts0],
+                  {supported_groups, [x448, x25519]} |ServerOpts0],
     ClientOpts = [{versions, ['tlsv1.2','tlsv1.3']},
-                  {supported_groups, [secp256r1, x25519]} | ClientOpts0],
+                  {supported_groups, [secp256r1, x25519]},
+                  {log_level, debug}| ClientOpts0],
     ssl_test_lib:basic_test(ClientOpts, ServerOpts, Config).
 %%--------------------------------------------------------------------
 custom_groups() ->
