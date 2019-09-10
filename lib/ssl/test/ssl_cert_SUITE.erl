@@ -785,10 +785,10 @@ hello_retry_request(Config) ->
     ClientOpts0 = ssl_test_lib:ssl_options(client_cert_opts, Config),
     ServerOpts0 = ssl_test_lib:ssl_options(server_cert_opts, Config),
     ServerOpts = [{versions, ['tlsv1.2','tlsv1.3']},
-                  {supported_groups, [x448, x25519]} |ServerOpts0],
+                  {supported_groups, [x448, x25519]} | proplists:delete(versions, ServerOpts0)],
     ClientOpts = [{versions, ['tlsv1.2','tlsv1.3']},
                   {supported_groups, [secp256r1, x25519]},
-                  {log_level, debug}| ClientOpts0],
+                  {log_level, debug} | proplists:delete(versions, ClientOpts0)],
     ssl_test_lib:basic_test(ClientOpts, ServerOpts, Config).
 %%--------------------------------------------------------------------
 custom_groups() ->
@@ -800,9 +800,11 @@ custom_groups(Config) ->
 
     %% Set versions
     ServerOpts = [{versions, ['tlsv1.2','tlsv1.3']},
-                  {supported_groups, [x448, secp256r1, secp384r1]}|ServerOpts0],
-    ClientOpts1 = [{versions, ['tlsv1.2','tlsv1.3']}|ClientOpts0],
-    ClientOpts = [{supported_groups,[secp384r1, secp256r1, x25519]}|ClientOpts1],
+                  {supported_groups, [x448, secp256r1, secp384r1]} |
+                  proplists:delete(versions, ServerOpts0)],
+    ClientOpts = [{versions, ['tlsv1.2','tlsv1.3']},
+                  {supported_groups,[secp384r1, secp256r1, x25519]} |
+                  proplists:delete(versions, ClientOpts0)],
     ssl_test_lib:basic_test(ClientOpts, ServerOpts, Config).
 
 %%--------------------------------------------------------------------
@@ -821,8 +823,8 @@ unsupported_sign_algo_cert_client_auth(Config) ->
                   {signature_algs, [rsa_pkcs1_sha256, rsa_pkcs1_sha384, rsa_pss_rsae_sha256]},
                   %% Skip rsa_pkcs1_sha256!
                   {signature_algs_cert, [rsa_pkcs1_sha384, rsa_pkcs1_sha512]},
-                  {fail_if_no_peer_cert, true}|ServerOpts0],
-    ClientOpts = [{versions, ['tlsv1.2','tlsv1.3']}|ClientOpts0],
+                  {fail_if_no_peer_cert, true} | proplists:delete(versions, ServerOpts0) ],
+    ClientOpts = [{versions, ['tlsv1.2','tlsv1.3']} | proplists:delete(versions, ClientOpts0)],
     ssl_test_lib:basic_alert(ClientOpts, ServerOpts, Config, certificate_required).
 
 %%--------------------------------------------------------------------
@@ -847,11 +849,11 @@ hello_retry_client_auth(Config) ->
     ClientOpts0 = ssl_test_lib:ssl_options(client_cert_opts, Config),
     ServerOpts0 = ssl_test_lib:ssl_options(server_cert_opts, Config),
     ServerOpts1 = [{versions, ['tlsv1.2','tlsv1.3']},
-                  {supported_groups, [x448, x25519]}|ServerOpts0],
+                  {supported_groups, [x448, x25519]}| ServerOpts0],
     ClientOpts = [{versions, ['tlsv1.2','tlsv1.3']},
-                  {supported_groups, [secp256r1, x25519]}|ClientOpts0],
+                  {supported_groups, [secp256r1, x25519]}|  proplists:delete(versions, ClientOpts0)],
     ServerOpts = [{verify, verify_peer},
-                  {fail_if_no_peer_cert, true} | ServerOpts1],
+                  {fail_if_no_peer_cert, true} |  proplists:delete(versions, ServerOpts0)],
     
     ssl_test_lib:basic_test(ClientOpts, ServerOpts, Config).
 %%--------------------------------------------------------------------
@@ -870,9 +872,9 @@ hello_retry_client_auth_empty_cert_accepted(Config) ->
     ServerOpts = [{versions, ['tlsv1.2','tlsv1.3']},
                   {verify, verify_peer},
                   {fail_if_no_peer_cert, false},
-                  {supported_groups, [x448, x25519]}|ServerOpts0],
+                  {supported_groups, [x448, x25519]} | proplists:delete(versions, ServerOpts0)],
     ClientOpts = [{versions, ['tlsv1.2','tlsv1.3']},
-                  {supported_groups, [secp256r1, x25519]}|ClientOpts2],
+                  {supported_groups, [secp256r1, x25519]} |  proplists:delete(versions, ClientOpts0)],
     ssl_test_lib:basic_test(ClientOpts, ServerOpts, Config).
 %%--------------------------------------------------------------------
 hello_retry_client_auth_empty_cert_rejected() ->
@@ -890,9 +892,9 @@ hello_retry_client_auth_empty_cert_rejected(Config) ->
     ServerOpts = [{versions, ['tlsv1.2','tlsv1.3']},
                   {verify, verify_peer},
                   {fail_if_no_peer_cert, true},
-                  {supported_groups, [x448, x25519]}|ServerOpts0],
+                  {supported_groups, [x448, x25519]} | proplists:delete(versions, ServerOpts0)],
     ClientOpts = [{versions, ['tlsv1.2','tlsv1.3']},
-                  {supported_groups, [secp256r1, x25519]}|ClientOpts2],
+                  {supported_groups, [secp256r1, x25519]} |  proplists:delete(versions, ClientOpts2)],
    
     ssl_test_lib:basic_alert(ClientOpts, ServerOpts, Config, certificate_required).
 
