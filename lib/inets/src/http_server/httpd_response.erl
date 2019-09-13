@@ -19,7 +19,7 @@
 %%
 %%
 -module(httpd_response).
--export([generate_and_send_response/1, send_status/3, send_header/3, 
+-export([generate_and_send_response/1, send_status/3, send_status/5, send_header/3, 
 	 send_body/3, send_chunk/3, send_final_chunk/2, send_final_chunk/3, 
 	 split_header/2, is_disable_chunked_send/1, cache_headers/2, handle_continuation/1]).
 -export([map_status_code/2]).
@@ -48,7 +48,7 @@ generate_and_send_response(#mod{config_db = ConfigDB} = ModData) ->
 	    ok;
 	{proceed, Data} ->
 	    case proplists:get_value(status, Data) of
-		{StatusCode, PhraseArgs, _Reason} ->
+		{StatusCode, PhraseArgs, _Reason} ->                                   
 		    send_status(ModData, StatusCode, PhraseArgs),
 		    ok;		
 		undefined ->
@@ -89,14 +89,12 @@ traverse_modules(ModData,[Module|Rest]) ->
             traverse_modules(ModData#mod{data = NewData}, Rest)
     catch 
 	T:E:Stacktrace ->
-	    String = 
-		lists:flatten(
-		  io_lib:format("module traverse failed: ~p:do => "
-				"~n   Error Type:  ~p"
-				"~n   Error:       ~p"
-				"~n   Stack trace: ~p",
-				[Module, T, E, Stacktrace])),
-	    httpd_util:error_log(ModData#mod.config_db, String),
+	    httpd_util:error_log(ModData#mod.config_db,  
+                                 httpd_logger:error_report(http, "module traverse failed: ~p:do => "
+                                                     "~n   Error Type:  ~p"
+                                                     "~n   Error:       ~p"
+                                                     "~n   Stack trace: ~p",
+                                                     [Module, T, E, Stacktrace], ModData)),
 	    send_status(ModData, 500, none),
 	    done
     end.
@@ -107,9 +105,12 @@ traverse_modules(ModData,[Module|Rest]) ->
 send_status(ModData, 100, _PhraseArgs) ->
     send_header(ModData, 100, [{content_length, "0"}]);
 
+send_status(ModData, StatusCode, PhraseArgs) ->
+    send_status(ModData, StatusCode, PhraseArgs, undefined, undefined).
+
 send_status(#mod{socket_type = SocketType, 
 		 socket      = Socket, 
-		 config_db   = ConfigDB} = ModData, StatusCode, PhraseArgs) ->
+		 config_db   = ConfigDB} = ModData, StatusCode, PhraseArgs, Fmt, Args) ->
 
     ReasonPhrase = httpd_util:reason_phrase(StatusCode),
     Message      = httpd_util:message(StatusCode, PhraseArgs, ConfigDB),
@@ -119,6 +120,16 @@ send_status(#mod{socket_type = SocketType,
 		[{content_type,   "text/html"},
 		 {content_length, integer_to_list(length(Body))}]),
 
+    if StatusCode >= 400 ->
+            case Fmt of
+                undefined ->
+                    httpd_util:error_log(httpd_logger:error_report(http, ":~p -- ~s", [StatusCode, ReasonPhrase], ModData));
+                _ ->
+                    httpd_util:error_log(httpd_logger:error_report(http, ":~p -- ~s --" ++ Fmt, [StatusCode, ReasonPhrase | Args], ModData))
+            end;
+       true ->
+            ok
+    end,  
     httpd_socket:deliver(SocketType, Socket, Body).
 
 

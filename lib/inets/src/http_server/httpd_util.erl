@@ -31,10 +31,11 @@
 	 convert_netscapecookie_date/1, enable_debug/1, valid_options/3,
 	 modules_validate/1, module_validate/1, 
 	 dir_validate/2, file_validate/2, mime_type_validate/1, 
-	 mime_types_validate/1, custom_date/0, error_log/2]).
+	 mime_types_validate/1, custom_date/0, error_log/1, error_log/2]).
 
 -export([encode_hex/1, decode_hex/1]).
 -include_lib("kernel/include/file.hrl").
+-include_lib("inets/include/httpd.hrl").
 
 ip_address({_,_,_,_} = Address, _IpFamily) ->
     {ok, Address};
@@ -762,16 +763,34 @@ do_enable_debug([{Level,Modules}|Rest])
     end,
     do_enable_debug(Rest).
 
-error_log(ConfigDb, Error) ->
-    error_log(mod_log, ConfigDb, Error),
-    error_log(mod_disk_log, ConfigDb, Error).
-	
-error_log(Mod, ConfigDB, Error) ->
+error_log(#{mod := #mod{config_db = Db}} = Report) ->
+    case lookup(Db, logger) of
+        undefined ->
+            ok;
+        Domain  ->
+            httpd_logger:log(Report, Domain)
+    end.
+
+error_log(ConfigDB, Report) ->
+    ErrFmt = httpd_logger:legacy_format(Report),
+    case lookup(ConfigDB, logger) of
+        undefined ->
+            mod_logging(mod_log, ConfigDB, ErrFmt),
+            mod_logging(mod_disk_log, ConfigDB, ErrFmt);
+        Domain  ->
+            httpd_logger:log(Report, Domain),
+            %% Backwards compat
+            mod_logging(mod_log, ConfigDB, ErrFmt),
+            mod_logging(mod_disk_log, ConfigDB, ErrFmt)
+    end.
+
+mod_logging(Mod, ConfigDB, {Fmt, Args}) ->
     Modules = httpd_util:lookup(ConfigDB, modules,
 				[mod_get, mod_head, mod_log]),
     case lists:member(Mod, Modules) of
 	true ->
-	    Mod:report_error(ConfigDB, Error);
+            ErrorStr = lists:flatten(io_lib:format(Fmt, Args)),
+            Mod:report_error(ConfigDB, ErrorStr);
 	_ ->
 	    ok
     end.

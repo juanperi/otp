@@ -353,6 +353,31 @@ text/plain	asc txt</pre>
 	<p>By default, the value is as before, that is, <c>minimal</c>.</p>
       </item>
 
+      
+      <tag><marker id="prop_logger"></marker>{logger, LoggerSubDomain::atom()}</tag>
+      <item>
+	<p>Produces <seealso marker="kernel:logger">logger</seealso> events under the domain [otp, inets, httpd, LoggerSubDomain].
+	Currently only events on the level error are produced. The built in formatter produces log entries from the
+	error reports:</p>
+
+	<code>#{protocol => internal | tcp | tls | http,
+               error_desc => string(),
+               peer => "IP:port"
+               host => "IP:Port"
+	       mod => #mod{},	       
+	       format => io:format(), %% Used whenprotocol = http
+               args => [term()],      %% Used with format
+	       level => error}.</code>
+
+	 <p>Using this option makes mod_log and mod_disk_log errorlogs redundant.</p>
+               
+	 <p>Add the filter {fun logger_filters:domain/2,{log,super,[otp,inets, httpd, LoggerDomain]}
+	to approriate logger handler to handle the events. For example if we assume that the httpd server is started with LoggerDomain=http_test  
+	the following would add the servers error loggs to the standard Erlang log.</p>
+	
+	 <code>logger:add_handler_filter(default, inets_httpd, {fun logger_filters:domain/2,{log,super,[otp,inets, httpd, httpd_test]}}).</code>	
+      </item>      
+      
       <tag><marker id="prop_log_format"></marker>{log_format, common | combined}</tag>
       <item>
 	<p>Defines if access logs are to be written according to the <c>common</c>

@@ -183,6 +183,7 @@ init_per_suite(Config) ->
     setup_tmp_dir(PrivDir),
     setup_server_dirs(ServerRoot, DocRoot, DataDir),
     {ok, Hostname0} = inet:gethostname(),
+    logger:add_handler_filter(default, inets_httpd, {fun logger_filters:domain/2,{log,super,[otp,inets, httpd, httpd_test]}}),
     Inet = 
 	case (catch ct:get_config(ipv6_hosts)) of
 	    undefined ->
@@ -2246,7 +2247,8 @@ head_status(_) ->
 
 basic_conf() ->
     [{modules, [mod_alias, mod_range, mod_responsecontrol,
-		mod_trace, mod_esi, mod_cgi, mod_get, mod_head]}].
+		mod_trace, mod_esi, mod_cgi, mod_get, mod_head]},
+     {logger, httpd_test}].
 
 not_sup_conf() ->
      [{modules, [mod_get]}].

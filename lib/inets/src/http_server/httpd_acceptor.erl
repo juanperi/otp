@@ -201,11 +201,9 @@ handle_error(Reason, ConfigDb) ->
 		    ReasonString :: string()) -> no_return(). 
 
 accept_failed(ConfigDb, String) ->
-    error_logger:error_report(String),
     InitData = #init_data{peername =  {0, "unknown"}},
-    Info = #mod{config_db = ConfigDb, init_data = InitData},
-    mod_log:error_log(Info, String),
-    mod_disk_log:error_log(Info, String),
+    ModData = #mod{config_db = ConfigDb, init_data = InitData},
+    httpd_util:error_log(ConfigDb, httpd_logger:error_report(tcp, String, ModData)),
     exit({accept_failed, String}).    
 
 sleep(T) -> receive after T -> ok end.
