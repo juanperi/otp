@@ -2382,7 +2382,9 @@ call(FsmPid, Event) ->
  	    {error, closed};
 	exit:{normal, _} ->
 	    {error, closed};
-	exit:{{shutdown, _},_} ->
+        exit:{{shutdown, user_timeout},_} ->
+	    {error, timeout};
+        exit:{{shutdown, _},_} ->
 	    {error, closed}
     end.
 

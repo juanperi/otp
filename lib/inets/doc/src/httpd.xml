@@ -353,6 +353,59 @@ text/plain	asc txt</pre>
 	<p>By default, the value is as before, that is, <c>minimal</c>.</p>
       </item>
 
+      
+      <tag><marker id="prop_logger"></marker>{logger, Options::list()}</tag>
+      <item>
+
+	<p>Currently only one option is supported: </p>
+	
+	<taglist>
+	  <tag><c>{error, Domain::atom}</c></tag>
+	  <item>
+	    <p>Produces  
+	    <seealso marker="kernel:logger#type-log_event">logger events</seealso>
+	    on logger <seealso marker="kernel:logger#type-level">level error</seealso>
+	    under the hierarchical logger <seealso marker="kernel:logger#type-log_event">domain:</seealso> <c>[otp, inets, httpd, Domain, error]</c>
+	    The built in <seealso marker="kernel:logger_filters#domain-2">logger format</seealso>
+	    function produces log entries from the
+	    error reports:</p>
+	    
+	    <code>
+#{server_name => string()
+protocol => internal | 'TCP' | 'TLS' | 'HTTP',
+transport => "TCP "| "TLS", %% Present when protocol = 'HTTP'
+uri => string(), %% Present when protocol = 'HTTP' and URI is valid
+peer => inet:peername(),
+host => inet:hostname(),
+reason => term()
+}
+</code>
+	  
+	<p>Using this option makes mod_log and mod_disk_log error logs redundant.</p>
+	
+	<p>Add the filter
+	<c>
+{fun logger_filters:domain/2,
+	{log,super,[otp,inets, httpd, Domain, error]}</c>
+	
+        to appropriate logger handler to handle the
+	events. For example if we assume that the httpd server is
+	started with Domain=http_test the following would add
+	the servers error loggs to the standard Erlang log.</p>
+	
+	<code>
+logger:add_handler_filter(default,
+                          inets_httpd,
+                          {fun logger_filters:domain/2,
+	                    {log, super,
+	[otp, inets, httpd, httpd_test, error]}}).</code>
+
+	  </item>      
+
+	</taglist> 
+	
+      </item>      
+      
       <tag><marker id="prop_log_format"></marker>{log_format, common | combined}</tag>
       <item>
 	<p>Defines if access logs are to be written according to the <c>common</c>
