@@ -592,6 +592,11 @@ validate_config_params([{default_type, Value} | Rest]) when is_list(Value) ->
 validate_config_params([{default_type, Value} | _]) ->
     throw({default_type, Value});
 
+validate_config_params([{logger, Value} | _]) when is_atom(Value) ->
+    validate_config_params(Rest);
+validate_config_params([{logger, Value} | _]) ->
+    throw({logger, Value});
+
 validate_config_params([{ssl_certificate_file = Key, Value} | Rest]) ->
     ok = httpd_util:file_validate(Key, Value),
     validate_config_params(Rest);

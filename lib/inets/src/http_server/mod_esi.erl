@@ -465,7 +465,8 @@ handle_body(Pid, ModData, Body, Timeout, Size, StatusCode, IsDisableChunkedSend)
 		       ModData#mod.data]};
 	{'EXIT', Pid, Reason} when is_pid(Pid) ->
 	    Error = lists:flatten(io_lib:format("mod_esi process failed with reason ~p", [Reason])),
-	    httpd_util:error_log(ModData#mod.config_db, Error),
+	    httpd_util:error_log(ModData#mod.config_db,  
+                                 httpd_logger:report(http, Error, ModData)),
 	    httpd_response:send_final_chunk(ModData, 
 					    [{"Warning", "199 inets server - body maybe incomplete, "
 					      "internal server error"}],

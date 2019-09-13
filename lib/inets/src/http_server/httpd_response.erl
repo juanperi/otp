@@ -89,14 +89,15 @@ traverse_modules(ModData,[Module|Rest]) ->
             traverse_modules(ModData#mod{data = NewData}, Rest)
     catch 
 	T:E:Stacktrace ->
-	    String = 
+	    ErrString = 
 		lists:flatten(
 		  io_lib:format("module traverse failed: ~p:do => "
 				"~n   Error Type:  ~p"
 				"~n   Error:       ~p"
 				"~n   Stack trace: ~p",
 				[Module, T, E, Stacktrace])),
-	    httpd_util:error_log(ModData#mod.config_db, String),
+	    httpd_util:error_log(ModData#mod.config_db,  
+                                 httpd_logger:report(http, ErrString, ModData)),
 	    send_status(ModData, 500, none),
 	    done
     end.

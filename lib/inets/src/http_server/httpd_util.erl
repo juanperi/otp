@@ -766,7 +766,21 @@ error_log(ConfigDb, Error) ->
     error_log(mod_log, ConfigDb, Error),
     error_log(mod_disk_log, ConfigDb, Error).
 	
-error_log(Mod, ConfigDB, Error) ->
+error_log(ConfigDB, Error) ->
+    Err = httpd_logger:format(#{msg => {report, Error}}),
+    ErrStr = binary_to_list(Err),
+    case lookup(ConfigDB, logger) of
+        undefined ->
+            mod_logging(mod_log, ConfigDB, ErrStr),
+            mod_logging(mod_disk_log, ConfigDB, ErrStr);
+        Domain  ->
+            httpd_logger:error_log(Domain, Error),
+            %% Backwards compat
+            mod_logging(mod_log, ConfigDB, ErrStr),
+            mod_logging(mod_disk_log, ConfigDB, ErrStr)
+    end.
+
+mod_logging(Mod, ConfigDB, Error) ->
     Modules = httpd_util:lookup(ConfigDB, modules,
 				[mod_get, mod_head, mod_log]),
     case lists:member(Mod, Modules) of

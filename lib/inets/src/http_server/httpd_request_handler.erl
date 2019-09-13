@@ -100,21 +100,30 @@ init([Manager, ConfigDB, AcceptTimeout]) ->
     
     {SocketType, Socket} = await_socket_ownership_transfer(AcceptTimeout),
     
+    %% Up until after negotiate the socket will be a normal gen_tcp socket
+    Peername = httpd_socket:peername(ip_comm, Socket),
+    Sockname = httpd_socket:sockname(ip_comm, Socket),
+ 
     %%Timeout value is in seconds we want it in milliseconds
     KeepAliveTimeOut = 1000 * httpd_util:lookup(ConfigDB, keep_alive_timeout, 150),
     
     case http_transport:negotiate(SocketType, Socket, ?HANDSHAKE_TIMEOUT) of
-	{error, Error} ->
-	    exit({shutdown, Error}); %% Can be 'normal'.
+	{error, {tls_alert, {_, AlertDesc} = Error} ->
+            ModData = #mod{config_db = ConfigDb, init_data = #init_data{peername = Peername,
+                                                                        sockname = Sockname},
+            httpd_util:error_log(ConfigDB, httpd_logger:report(tls, AlertDesc, ModData)),
+	    exit({shutdown, Error}); 
 	ok ->
-	    continue_init(Manager, ConfigDB, SocketType, Socket, KeepAliveTimeOut)
+	    continue_init(Manager, ConfigDB, SocketType, Socket, 
+                          Peername, Sockname, KeepAliveTimeOut)
     end.
 
-continue_init(Manager, ConfigDB, SocketType, Socket, TimeOut) ->
+continue_init(Manager, ConfigDB, SocketType, Socket, Peername, Sockname,
+              TimeOut) ->
     Resolve = http_transport:resolve(),
-    
-    Peername = httpd_socket:peername(SocketType, Socket),
-    InitData = #init_data{peername = Peername, resolve = Resolve},
+    InitData = #init_data{peername = Peername, 
+                          sockname = SockName, 
+                          resolve = Resolve},
     Mod = #mod{config_db = ConfigDB,
                socket_type = SocketType,
                socket = Socket,
@@ -732,10 +741,10 @@ decrease(N) when is_integer(N) ->
 decrease(N) ->
     N.
 
-error_log(ReasonString,  #mod{config_db = ConfigDB}) ->
+error_log(ReasonString,  #mod{config_db = ConfigDB} = ModData) ->
     Error = lists:flatten(
 	      io_lib:format("Error reading request: ~s", [ReasonString])),
-    httpd_util:error_log(ConfigDB, Error).
+    httpd_util:error_log(ConfigDB, httpd_logger:report(http, Error, ModData)).
 
 
 %%--------------------------------------------------------------------
