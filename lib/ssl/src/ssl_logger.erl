@@ -48,9 +48,11 @@ log(Level, LogLevel, ReportMap, Meta) ->
     case logger:compare_levels(LogLevel, Level) of
         lt ->
             logger:log(Level, ReportMap,  Meta#{depth => ?DEPTH, 
+                                                domain => [otp,ssl],
                                                 rport_cb => fun ?MODULE:format/1});
         eq ->
             logger:log(Level, ReportMap, Meta#{depth => ?DEPTH, 
+                                               domain => [otp,ssl],
                                                rport_cb => fun ?MODULE:format/1});
         _ ->
             ok

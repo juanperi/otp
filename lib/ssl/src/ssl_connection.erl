@@ -1500,7 +1500,7 @@ handle_info({ErrorTag, Socket, econnaborted}, StateName,
 handle_info({ErrorTag, Socket, Reason}, StateName, #state{static_env = #static_env{socket = Socket,
                                                                                    error_tag = ErrorTag},
                                                           ssl_options = #{log_level := Level}} = State)  ->
-    ssl_logger:log(info, Level, #{event => "Socket error", 
+    ssl_logger:log(info, Level, #{description => "Socket error", 
                                   reason => [{error_tag, ErrorTag}, {description, Reason}]}, ?LOCATION),
     handle_normal_shutdown(?ALERT_REC(?FATAL, ?CLOSE_NOTIFY), StateName, State),
     {stop, {shutdown,normal}, State};
@@ -1531,7 +1531,7 @@ handle_info(allow_renegotiate, StateName, #state{handshake_env = HsEnv} = State)
 
 handle_info(Msg, StateName, #state{static_env = #static_env{socket = Socket, error_tag = ErrorTag},
                                    ssl_options = #{log_level := Level}} = State) ->
-    ssl_logger:log(notice, Level, #{event => "Unexpected INFO message", 
+    ssl_logger:log(notice, Level, #{description => "Unexpected INFO message", 
                                     reason => [{message, Msg}, {socket, Socket}, 
                                                {error_tag, ErrorTag}]}, ?LOCATION),
     {next_state, StateName, State}.
