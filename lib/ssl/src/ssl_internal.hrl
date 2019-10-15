@@ -206,7 +206,8 @@
 
 -record(config, {ssl,               %% SSL parameters
 		 inet_user,         %% User set inet options
-		 emulated,          %% Emulated option list or "inherit_tracker" pid
+		 emulated,          %% Emulated option list or 
+                 trackers, 
 		 dtls_handler,
 		 inet_ssl,          %% inet options for internal ssl socket
 		 transport_info,                 %% Callback info

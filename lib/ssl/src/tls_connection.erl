@@ -99,28 +99,28 @@
 %%====================================================================
 %% Setup
 %%====================================================================
-start_fsm(Role, Host, Port, Socket, {#{erl_dist := false},_, Tracker} = Opts,
+start_fsm(Role, Host, Port, Socket, {#{erl_dist := false},_, Trackers} = Opts,
 	  User, {CbModule, _,_, _, _} = CbInfo, 
 	  Timeout) -> 
     try 
         {ok, Sender} = tls_sender:start(),
 	{ok, Pid} = tls_connection_sup:start_child([Role, Sender, Host, Port, Socket, 
 						    Opts, User, CbInfo]), 
-	{ok, SslSocket} = ssl_connection:socket_control(?MODULE, Socket, [Pid, Sender], CbModule, Tracker),
+	{ok, SslSocket} = ssl_connection:socket_control(?MODULE, Socket, [Pid, Sender], CbModule, Trackers),
         ssl_connection:handshake(SslSocket, Timeout)
     catch
 	error:{badmatch, {error, _} = Error} ->
 	    Error
     end;
 
-start_fsm(Role, Host, Port, Socket, {#{erl_dist := true},_, Tracker} = Opts,
+start_fsm(Role, Host, Port, Socket, {#{erl_dist := true},_, Trackers} = Opts,
 	  User, {CbModule, _,_, _, _} = CbInfo, 
 	  Timeout) -> 
     try 
         {ok, Sender} = tls_sender:start([{spawn_opt, ?DIST_CNTRL_SPAWN_OPTS}]),
 	{ok, Pid} = tls_connection_sup:start_child_dist([Role, Sender, Host, Port, Socket, 
 							 Opts, User, CbInfo]), 
-	{ok, SslSocket} = ssl_connection:socket_control(?MODULE, Socket, [Pid, Sender], CbModule, Tracker),
+	{ok, SslSocket} = ssl_connection:socket_control(?MODULE, Socket, [Pid, Sender], CbModule, Trackers),
         ssl_connection:handshake(SslSocket, Timeout)
     catch
 	error:{badmatch, {error, _} = Error} ->
@@ -515,8 +515,8 @@ protocol_name() ->
 %% Data handling
 %%====================================================================	     
 
-socket(Pids,  Transport, Socket, Tracker) ->
-    tls_socket:socket(Pids, Transport, Socket, ?MODULE, Tracker).
+socket(Pids,  Transport, Socket, Trackers) ->
+    tls_socket:socket(Pids, Transport, Socket, ?MODULE, Trackers).
 
 setopts(Transport, Socket, Other) ->
     tls_socket:setopts(Transport, Socket, Other).
@@ -576,7 +576,9 @@ init({call, From}, {start, Timeout},
     State = State0#state{connection_states = ConnectionStates,
                          connection_env = CEnv#connection_env{negotiated_version = HelloVersion}, %% Requested version
                          session = Session,
-                         handshake_env = HsEnv#handshake_env{tls_handshake_history = Handshake},
+                         handshake_env = HsEnv#handshake_env{tls_handshake_history = Handshake,
+                                                             %%TODO Not hard code
+                                                             ticket_seed = {crypto:strong_rand_bytes(16), crypto:strong_rand_bytes(32)}},
                          start_or_recv_from = From,
                          key_share = KeyShare},
     next_event(hello, no_record, State, [{{timeout, handshake}, Timeout, close}]);
@@ -996,7 +998,7 @@ code_change(_OldVsn, StateName, State, _) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
-initial_state(Role, Sender, Host, Port, Socket, {SSLOptions, SocketOptions, Tracker}, User,
+initial_state(Role, Sender, Host, Port, Socket, {SSLOptions, SocketOptions, Trackers}, User,
 	      {CbModule, DataTag, CloseTag, ErrorTag, PassiveTag}) ->
     #{beast_mitigation := BeastMitigation,
       erl_dist := IsErlDist,
@@ -1027,7 +1029,7 @@ initial_state(Role, Sender, Host, Port, Socket, {SSLOptions, SocketOptions, Trac
                      port = Port,
                      socket = Socket,
                      session_cache_cb = SessionCacheCb,
-                     tracker = Tracker
+                     trackers = Trackers
                     },
     #state{
        static_env = InitStatEnv,
@@ -1055,7 +1057,7 @@ initialize_tls_sender(#state{static_env = #static_env{
                                              role = Role,
                                              transport_cb = Transport,
                                              socket = Socket,
-                                             tracker = Tracker
+                                             trackers = Trackers
                                             },
                              connection_env = #connection_env{negotiated_version = Version},
                              socket_options = SockOpts, 
@@ -1067,7 +1069,7 @@ initialize_tls_sender(#state{static_env = #static_env{
              role => Role,
              socket => Socket,
              socket_options => SockOpts,
-             tracker => Tracker,
+             trackers => Trackers,
              transport_cb => Transport,
              negotiated_version => Version,
              renegotiate_at => RenegotiateAt,

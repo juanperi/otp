@@ -686,9 +686,10 @@ handshake(ListenSocket, SslOptions)  when is_port(ListenSocket) ->
 handshake(#sslsocket{} = Socket, [], Timeout) when (is_integer(Timeout) andalso Timeout >= 0) or 
                                                     (Timeout == infinity)->
     handshake(Socket, Timeout);
-handshake(#sslsocket{fd = {_, _, _, Tracker}} = Socket, SslOpts, Timeout) when
+handshake(#sslsocket{fd = {_, _, _, Trackers}} = Socket, SslOpts, Timeout) when
       (is_integer(Timeout) andalso Timeout >= 0) or (Timeout == infinity)->
     try
+        Tracker = proplists:get_value(option_tracker, Trackers),
 	{ok, EmOpts, _} = tls_socket:get_all_opts(Tracker),
 	ssl_connection:handshake(Socket, {SslOpts, 
 					  tls_socket:emulated_socket_options(EmOpts, #socket_options{})}, Timeout)

@@ -548,7 +548,7 @@ do_start(#client_hello{cipher_suites = ClientCiphers,
         Cipher = Maybe(select_cipher_suite(HonorCipherOrder, ClientCiphers, ServerCiphers)),
 
         %% Update server instance data used for ticket generation
-        maybe_initialize_instance_data(State0),
+        %% TODO remove maybe_initialize_instance_data(State0),
 
         %% Exclude any incompatible PSKs.
         PSK = handle_pre_shared_key(State0, OfferedPSKs, Cipher),
@@ -1170,73 +1170,37 @@ maybe_send_session_ticket(#state{ssl_options = #{session_tickets := false}} = St
     %% Do nothing!
     State;
 maybe_send_session_ticket(#state{ssl_options = #{session_tickets := _SessionTickets}} = State0) ->
-    NewSessionTicket = create_stateless_ticket(State0),
-    {State, _} = tls_connection:send_handshake(NewSessionTicket, State0),
+    Ticket = create_ticket(State0),
+    {State, _} = tls_connection:send_handshake(Ticket, State0),
     State.
 
-
-maybe_initialize_instance_data(#state{ssl_options = #{session_tickets := false}} = State) ->
-    State;
-maybe_initialize_instance_data(_) ->
-    case tls_session_ticket:read_server_state() of
-        undefined ->
-            %% Initialize
-            Data = #server_instance_data{
-                         nonce = 0,
-                         ticket_iv = crypto:strong_rand_bytes(16),
-                         ticket_key_shard = crypto:strong_rand_bytes(32)},
-            tls_session_ticket:store_server_state(Data);
-        _Data ->
-            ok
-    end.
-
-
-create_stateless_ticket(State) ->
-    Data = #server_instance_data{nonce = Nonce} = tls_session_ticket:read_server_state(),
-    TicketAgeAdd = ticket_age_add(),
-    Ticket = #new_session_ticket{
-                ticket_lifetime = 7200,
-                ticket_age_add = TicketAgeAdd,
-                ticket_nonce = ticket_nonce(Nonce),
-                ticket = generate_ticket(State, Data, TicketAgeAdd),
-                extensions = #{}
-               },
-    %% Increment nonce
-    tls_session_ticket:increment_ticket_nonce(),
-    Ticket.
-
-
-ticket_age_add() ->
-    <<?UINT32(I)>> = crypto:strong_rand_bytes(4),
-    I.
-
-
-ticket_nonce(I) ->
-    <<?UINT64(I)>>.
-
+create_ticket(#state{static_env = #static_env{trackers = Trackers},
+                     handshake_env = #handshake_env{ticket_seed = undefined}}) ->
+    Tracker = proplists:get_value(session_tickets_tracker, Trackers),
+    tls_server_session_ticket:new(Tracker);
+create_ticket(#state{static_env = #static_env{trackers = Trackers}} = State) ->
+    Tracker = proplists:get_value(session_tickets_tracker, Trackers),
+    BaseTicket = tls_server_session_ticket:new(Tracker),
+    generate_statless_ticket(BaseTicket, State).
 
 %% Generate ticket field of NewSessionTicket.
-generate_ticket(#state{connection_states = ConnectionStates},
-                #server_instance_data{
-                   nonce = Nonce,
-                   ticket_iv = IV,
-                   ticket_key_shard = Key0},
-                TicketAgeAdd) ->
+generate_statless_ticket(#new_session_ticket{ticket_nonce = Nonce, ticket_age_add = TicketAgeAdd} = Ticket,
+                         #state{handshake_env = #handshake_env{ticket_seed = {IV, Shard}}, 
+                                connection_states = ConnectionStates}) ->
     #{security_parameters := SecParamsR} =
         ssl_record:current_connection_state(ConnectionStates, read),
     #security_parameters{prf_algorithm = HKDF,
                          resumption_master_secret = RMS} = SecParamsR,
-
-    PSK = tls_v1:pre_shared_key(RMS, ticket_nonce(Nonce), HKDF),
+    
+    PSK = tls_v1:pre_shared_key(RMS, Nonce, HKDF),
     Padding = binary:copy(<<0>>, 11),
     Plaintext = <<(ssl_cipher:hash_algorithm(HKDF)):8,PSK/binary,?UINT64(TicketAgeAdd),Padding/binary>>,
-    Size = byte_size(Key0),
+    Size = byte_size(Shard),
     OTP = crypto:strong_rand_bytes(Size),
-    Key = crypto:exor(OTP, Key0),
+    Key = crypto:exor(OTP, Shard),
     Encrypted = crypto:crypto_one_time(aes_256_cbc, Key, IV, Plaintext, true),
-    <<OTP/binary, Encrypted/binary>>.
-
-
+    Ticket#new_session_ticket{ticket = <<OTP/binary, Encrypted/binary>>}.
+    
 process_certificate_request(#certificate_request_1_3{},
                             #state{session = #session{own_certificate = undefined}} = State) ->
     {ok, {State#state{client_certificate_requested = true}, wait_cert}};
@@ -2148,10 +2112,8 @@ handle_pre_shared_key(_, undefined, _) ->
     undefined;
 handle_pre_shared_key(#state{ssl_options = #{session_tickets := false}}, _, _) ->
     undefined;
-handle_pre_shared_key(_, PreSharedKeys, Cipher) ->
-    #server_instance_data{ticket_iv = IV, ticket_key_shard = Key} =
-        tls_session_ticket:read_server_state(),
-    PSKs = decode_pre_shared_keys(IV, Key, PreSharedKeys),
+handle_pre_shared_key(#state{handshake_env = #handshake_env{ticket_seed = {IV, Shard}}}, PreSharedKeys, Cipher) ->
+    PSKs = decode_pre_shared_keys(IV, Shard, PreSharedKeys),
     select_psk(PSKs, Cipher).
 
 

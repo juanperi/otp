@@ -50,7 +50,7 @@
                      crl_db                :: term(),
                      file_ref_db          :: db_handle(),
                      cert_db_ref          :: certdb_ref() | 'undefined',
-                     tracker              :: pid() | 'undefined' %% Tracker process for listen socket
+                     trackers              :: [{atom(), pid()}] | 'undefined' %% Tracker process for listen socket
                     }).
 
 
@@ -79,7 +79,8 @@
                         srp_params           :: #srp_user{} | secret_printout() | 'undefined',
                         public_key_info      :: ssl_handshake:public_key_info() | 'undefined',
                         premaster_secret     :: binary() | secret_printout() | 'undefined',
-                        server_psk_identity         :: binary() | 'undefined'  % server psk identity hint
+                        server_psk_identity         :: binary() | 'undefined',  % server psk identity hint
+                        ticket_seed      ::  map() | 'undefined'  %% Used for TLS 1.3 statless tickets                       
                        }).
 
 -record(connection_env, { 
