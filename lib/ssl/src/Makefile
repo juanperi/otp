@@ -92,6 +92,7 @@ MODULES= \
 	tls_record \
 	tls_record_1_3 \
 	tls_sender \
+	tls_session_ticket\
 	tls_socket \
 	tls_sup \
 	tls_v1

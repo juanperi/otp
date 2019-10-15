@@ -652,7 +652,7 @@ do_start(#server_hello{cipher_suite = SelectedCipherSuite,
         %% new KeyShareEntry for the group indicated in the selected_group field
         %% of the triggering HelloRetryRequest.
         ClientKeyShare = ssl_cipher:generate_client_shares([SelectedGroup]),
-        TicketData = tls_connection:get_ticket_data(SessionTickets, UseTicket),
+        TicketData = tls_session_ticket:get_ticket_data(SessionTickets, UseTicket),
         Hello0 = tls_handshake:client_hello(Host, Port, ConnectionStates0, SslOpts,
                                            SessionId, Renegotiation, Cert, ClientKeyShare,
                                            TicketData),
@@ -1178,21 +1178,21 @@ maybe_send_session_ticket(#state{ssl_options = #{session_tickets := _SessionTick
 maybe_initialize_instance_data(#state{ssl_options = #{session_tickets := false}} = State) ->
     State;
 maybe_initialize_instance_data(_) ->
-    case tls_connection:read_server_state() of
+    case tls_session_ticket:read_server_state() of
         undefined ->
             %% Initialize
             Data = #server_instance_data{
                          nonce = 0,
                          ticket_iv = crypto:strong_rand_bytes(16),
                          ticket_key_shard = crypto:strong_rand_bytes(32)},
-            tls_connection:store_server_state(Data);
+            tls_session_ticket:store_server_state(Data);
         _Data ->
             ok
     end.
 
 
 create_stateless_ticket(State) ->
-    Data = #server_instance_data{nonce = Nonce} = tls_connection:read_server_state(),
+    Data = #server_instance_data{nonce = Nonce} = tls_session_ticket:read_server_state(),
     TicketAgeAdd = ticket_age_add(),
     Ticket = #new_session_ticket{
                 ticket_lifetime = 7200,
@@ -1202,7 +1202,7 @@ create_stateless_ticket(State) ->
                 extensions = #{}
                },
     %% Increment nonce
-    tls_connection:increment_ticket_nonce(),
+    tls_session_ticket:increment_ticket_nonce(),
     Ticket.
 
 
@@ -1487,7 +1487,7 @@ get_pre_shared_key(_, undefined, HKDFAlgo, _) ->
     binary:copy(<<0>>, ssl_cipher:hash_size(HKDFAlgo));
 %% Session resumption
 get_pre_shared_key(SessionTickets, UseTicket, HKDFAlgo, _) ->
-    case tls_connection:get_ticket_data(SessionTickets, UseTicket) of
+    case tls_session_ticket:get_ticket_data(SessionTickets, UseTicket) of
         undefined ->
             binary:copy(<<0>>, ssl_cipher:hash_size(HKDFAlgo));
         {_, PSK, _, _} ->
@@ -2150,7 +2150,7 @@ handle_pre_shared_key(#state{ssl_options = #{session_tickets := false}}, _, _) -
     undefined;
 handle_pre_shared_key(_, PreSharedKeys, Cipher) ->
     #server_instance_data{ticket_iv = IV, ticket_key_shard = Key} =
-        tls_connection:read_server_state(),
+        tls_session_ticket:read_server_state(),
     PSKs = decode_pre_shared_keys(IV, Key, PreSharedKeys),
     select_psk(PSKs, Cipher).
 

@@ -53,11 +53,6 @@
                      tracker              :: pid() | 'undefined' %% Tracker process for listen socket
                     }).
 
--record(server_instance_data, {
-                               nonce = 0        :: integer(),
-                               ticket_iv        :: binary(),
-                               ticket_key_shard :: binary()
-                 }).
 
 -record(handshake_env, {
                         client_hello_version  :: ssl_record:ssl_version() | 'undefined',

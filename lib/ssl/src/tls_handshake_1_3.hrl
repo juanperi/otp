@@ -259,4 +259,11 @@
 
 -export_type([tls_handshake_1_3/0]).
 
+%% TODO: Maybe session ticket seed
+-record(server_instance_data, {
+                               nonce = 0        :: integer(),
+                               ticket_iv        :: binary(),
+                               ticket_key_shard :: binary()
+                 }).
+
 -endif. % -ifdef(tls_handshake_1_3).
