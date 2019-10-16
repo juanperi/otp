@@ -64,8 +64,8 @@ new(Pid) ->
 
 init(Args) ->
     process_flag(trap_exit, true),
-    inital_state(Args),
-    {ok, #state{}}.
+    State = inital_state(Args),
+    {ok, State}.
 
 -spec handle_call(Request :: term(), From :: {pid(), term()}, State :: term()) ->
                          {reply, Reply :: term(), NewState :: term()} |
@@ -76,12 +76,12 @@ init(Args) ->
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
                          {stop, Reason :: term(), NewState :: term()}.
-handle_call(new_ticket, _From, #state{stateless_nonce = Nonce} = State) when Nonce =:= undefined -> 
+handle_call(new_ticket, _From, #state{stateless_nonce = Nonce} = State) when Nonce =/= undefined -> 
     TicketAgeAdd = ticket_age_add(),
     Reply = #new_session_ticket{
                ticket_lifetime = State#state.lifetime,
                ticket_age_add = TicketAgeAdd,
-               ticket_nonce = ticket_nonce(Nonce),
+               ticket_nonce = Nonce,
                extensions = #{}
               }, 
     {reply, Reply, State#state{stateless_nonce = Nonce + 1}}.
@@ -136,6 +136,6 @@ ticket_age_add() ->
     <<?UINT32(I)>> = crypto:strong_rand_bytes(4),
     I.
 
-ticket_nonce(I) ->
-    <<?UINT64(I)>>.
+%% ticket_nonce(I) ->
+%%     <<?UINT64(I)>>.
 

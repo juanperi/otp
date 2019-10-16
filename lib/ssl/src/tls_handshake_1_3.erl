@@ -1192,7 +1192,7 @@ generate_statless_ticket(#new_session_ticket{ticket_nonce = Nonce, ticket_age_ad
     #security_parameters{prf_algorithm = HKDF,
                          resumption_master_secret = RMS} = SecParamsR,
     
-    PSK = tls_v1:pre_shared_key(RMS, Nonce, HKDF),
+    PSK = tls_v1:pre_shared_key(RMS, ticket_nonce(Nonce), HKDF),
     Padding = binary:copy(<<0>>, 11),
     Plaintext = <<(ssl_cipher:hash_algorithm(HKDF)):8,PSK/binary,?UINT64(TicketAgeAdd),Padding/binary>>,
     Size = byte_size(Shard),
@@ -2233,3 +2233,7 @@ update_binder(#client_hello{extensions =
 
     Extensions = Extensions0#{pre_shared_key => PreSharedKey},
     Hello#client_hello{extensions = Extensions}.
+
+ticket_nonce(I) ->
+     <<?UINT64(I)>>.
+

@@ -43,8 +43,8 @@ groups() ->
     [{'tlsv1.3', [], session_tests()}].
 
 session_tests() ->
-    [erlang_client_erlang_server_basic,
-     erlang_client_openssl_server_basic].
+    [erlang_client_erlang_server_basic]. %%,
+     %%erlang_client_openssl_server_basic].
 
 
 init_per_suite(Config0) ->
@@ -113,9 +113,9 @@ erlang_client_erlang_server_basic(Config) when is_list(Config) ->
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
     %% Configure session tickets
-    ClientOpts = [{session_tickets, true}, {log_level, debug},
+    ClientOpts = [{session_tickets, true}, %%{log_level, debug},
                   {versions, ['tlsv1.2','tlsv1.3']}|ClientOpts0],
-    ServerOpts = [{session_tickets, true}, {log_level, debug},
+    ServerOpts = [{session_tickets, true}, %%{log_level, debug},
                   {versions, ['tlsv1.2','tlsv1.3']}|ServerOpts0],
 
     Server0 =
@@ -170,7 +170,7 @@ erlang_client_openssl_server_basic(Config) when is_list(Config) ->
     KeyFile = proplists:get_value(keyfile, ServerOpts),
 
     %% Configure session tickets
-    ClientOpts = [{session_tickets, true}, {log_level, debug},
+    ClientOpts = [{session_tickets, true}, %%{log_level, debug},
                   {versions, ['tlsv1.2','tlsv1.3']}|ClientOpts0],
 
     Exe = "openssl",

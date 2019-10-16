@@ -576,9 +576,7 @@ init({call, From}, {start, Timeout},
     State = State0#state{connection_states = ConnectionStates,
                          connection_env = CEnv#connection_env{negotiated_version = HelloVersion}, %% Requested version
                          session = Session,
-                         handshake_env = HsEnv#handshake_env{tls_handshake_history = Handshake,
-                                                             %%TODO Not hard code
-                                                             ticket_seed = {crypto:strong_rand_bytes(16), crypto:strong_rand_bytes(32)}},
+                         handshake_env = HsEnv#handshake_env{tls_handshake_history = Handshake},
                          start_or_recv_from = From,
                          key_share = KeyShare},
     next_event(hello, no_record, State, [{{timeout, handshake}, Timeout, close}]);
@@ -1036,7 +1034,9 @@ initial_state(Role, Sender, Host, Port, Socket, {SSLOptions, SocketOptions, Trac
        handshake_env = #handshake_env{
                           tls_handshake_history = ssl_handshake:init_handshake_history(),
                           renegotiation = {false, first},
-                          allow_renegotiate = ClientRenegotiation
+                          allow_renegotiate = ClientRenegotiation,
+                          %%TODO Not hard code
+                          ticket_seed = {crypto:strong_rand_bytes(16), crypto:strong_rand_bytes(32)}
                          },
        connection_env = #connection_env{user_application = {UserMonitor, User}},
        socket_options = SocketOptions,
