@@ -44,6 +44,7 @@
 -record(state, {
                 stateless,
                 stateful,
+                nonce,
                 lifetime
                }).
 
@@ -83,12 +84,9 @@ init(Args) ->
 
 -spec handle_call(Request :: term(), From :: {pid(), term()}, State :: term()) ->
                          {reply, Reply :: term(), NewState :: term()} .
-handle_call(new_ticket, _From, #state{stateless = #{nonce := Nonce} = Stateless} = State) -> 
-    Ticket = new_ticket(Nonce, State#state.lifetime),
-    {reply, Ticket, State#state{stateless = Stateless#{nonce => Nonce + 1}}};
-handle_call(new_ticket, _From, State) -> 
-    Ticket = new_ticket(State),
-    {reply, Ticket, State};
+handle_call(new_ticket, _From, #state{nonce = Nonce} = State) -> 
+    Ticket = new_ticket(Nonce),
+    {reply, Ticket, State#state{nonce => Nonce +1};
 handle_call(new_with_seed, _From, #state{stateless = #{nonce := Nonce, seed := Seed} = Stateless} = State) -> 
     Ticket = new_ticket(Nonce, State#state.lifetime),
     {reply, {Ticket, Seed}, State#state{stateless = Stateless#{nonce => Nonce + 1}}};
@@ -140,15 +138,15 @@ format_status(_Opt, Status) ->
 
 
 inital_state([stateless, Lifetime, undefined]) ->
-    #state{stateless = #{nonce => 0,
-                         seed => {crypto:strong_rand_bytes(16), 
+    #state{nonce = 0,
+           stateless = #{seed => {crypto:strong_rand_bytes(16), 
                                   crypto:strong_rand_bytes(32)}},
            lifetime = Lifetime
           };
 inital_state([stateless, Lifetime, {Window, K, M}]) ->
     erlang:send_after(Window * 1000, self(), rotate_bloom_filters),
-    #state{stateless = #{bloom_filter => tls_bloom_filter:new(K, M),
-                         nonce => 0,
+    #state{nonce = 0,
+           stateless = #{bloom_filter => tls_bloom_filter:new(K, M),                  
                          seed => {crypto:strong_rand_bytes(16),
                                   crypto:strong_rand_bytes(32)},
                          windows => Window},
@@ -156,6 +154,7 @@ inital_state([stateless, Lifetime, {Window, K, M}]) ->
           };
 inital_state([stateful, Lifetime]) ->
     #state{lifetime = Lifetime,
+           nonce = 0,
            stateful = #{db => gb_trees:empty(),
                         max => 1000}
           }.
@@ -183,6 +182,16 @@ new_ticket(Nonce, Lifetime) ->
        ticket_nonce = ticket_nonce(Nonce),
        extensions = #{}
       }.
+new_ticket(#state{stateful = #{},
+                  nonce = Nonce,
+                  lifetime = Lifetime}) ->
+    Ticket = erlang:term_to_binary(erlang:monotonic_time()),
+    NewTicket = new_ticket(Nonce, Lifetime),
+    NewTicket#new_ticket#{ticket = Ticket};
+new_ticket(#state{stateless = #{},
+                  nonce = Nonce,
+                  lifetime = Lifetime}) ->
+    NewTicket = new_ticket(Nonce, Lifetime).
 
 new_ticket(_) ->
-    #new_session_ticket{}.
+    #new_session_ticket{}.                          
