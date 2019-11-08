@@ -32,6 +32,7 @@
 -export([start_link/3,
          new/1,
          new_with_seed/1,
+         use/2,
          bloom_filter_add_elem/2,
          bloom_filter_contains/2]).
 
@@ -64,6 +65,9 @@ new(Pid) ->
 new_with_seed(Pid) ->
     gen_server:call(Pid, new_with_seed, infinity).
 
+use(Pid, Id) ->
+    gen_server:call(Pid, {use_ticket, Id}, infinity).
+
 bloom_filter_add_elem(Pid, Elem) ->
     gen_server:cast(Pid, {add_elem, Elem}).
 
@@ -84,9 +88,15 @@ init(Args) ->
 
 -spec handle_call(Request :: term(), From :: {pid(), term()}, State :: term()) ->
                          {reply, Reply :: term(), NewState :: term()} .
-handle_call(new_ticket, _From, #state{nonce = Nonce} = State) -> 
+handle_call(new_ticket, _From, #state{nonce = Nonce, stateful = #{db := Store, max := Max}} = State) -> 
+    NewStore = stateful_new(Nonce, Max, Store),
+    {reply, Ticket#new_session_ticket{ticket = Id}, State#state{nonce => Nonce+1, db => NewStore}};
+handle_call(new_ticket, _From, #state{nonce = Nonce, stateless = #{}} = State) -> 
     Ticket = new_ticket(Nonce),
-    {reply, Ticket, State#state{nonce => Nonce +1};
+    {reply, Ticket, State#state{nonce => Nonce+1};
+handle_call({use_ticket, Id}, _From, #state{nonce = Nonce, stateful = #{}} = State) -> 
+    Ticket = stateful_use(Id)
+    {reply, Ticket, State#state{};
 handle_call(new_with_seed, _From, #state{stateless = #{nonce := Nonce, seed := Seed} = Stateless} = State) -> 
     Ticket = new_ticket(Nonce, State#state.lifetime),
     {reply, {Ticket, Seed}, State#state{stateless = Stateless#{nonce => Nonce + 1}}};
@@ -136,7 +146,6 @@ format_status(_Opt, Status) ->
 %%% Internal functions
 %%%===================================================================
 
-
 inital_state([stateless, Lifetime, undefined]) ->
     #state{nonce = 0,
            stateless = #{seed => {crypto:strong_rand_bytes(16), 
@@ -155,7 +164,7 @@ inital_state([stateless, Lifetime, {Window, K, M}]) ->
 inital_state([stateful, Lifetime]) ->
     #state{lifetime = Lifetime,
            nonce = 0,
-           stateful = #{db => gb_trees:empty(),
+           stateful = #{db => stateful_store(),
                         max => 1000}
           }.
 
@@ -174,6 +183,10 @@ ticket_age_add() ->
 ticket_nonce(I) ->
     <<?UINT64(I)>>.
 
+new_ticket(#state{nonce = Nonce,
+                  lifetime = Lifetime}) ->
+    new_ticket(Nonce, Lifetime).
+
 new_ticket(Nonce, Lifetime) ->
     TicketAgeAdd = ticket_age_add(),
     #new_session_ticket{
@@ -182,16 +195,33 @@ new_ticket(Nonce, Lifetime) ->
        ticket_nonce = ticket_nonce(Nonce),
        extensions = #{}
       }.
-new_ticket(#state{stateful = #{},
-                  nonce = Nonce,
-                  lifetime = Lifetime}) ->
-    Ticket = erlang:term_to_binary(erlang:monotonic_time()),
-    NewTicket = new_ticket(Nonce, Lifetime),
-    NewTicket#new_ticket#{ticket = Ticket};
-new_ticket(#state{stateless = #{},
-                  nonce = Nonce,
-                  lifetime = Lifetime}) ->
-    NewTicket = new_ticket(Nonce, Lifetime).
 
-new_ticket(_) ->
-    #new_session_ticket{}.                          
+%%%===================================================================
+%%% Stateful store 
+%%%===================================================================
+
+stateful_store() ->
+    gb_trees:new().
+
+stateful_new(Nonce, Max, Tree0) ->
+    Ticket = new_ticket(Nonce),
+    Id = erlang:term_to_binary(erlang:monotonic_time()),
+    case gb_trees:size(Tree0) of
+        Max ->
+            %% Trow away oldes ticket
+            {_, , Tree} = gb_trees:take_smallest(Tree0),
+            gb_trees:insert(Id, Ticket, Tree);
+        _ ->
+            gb_trees:insert(Id, Ticket, Tree)
+    end.  
+
+stateful_use(Key, Tree0) ->
+    try take(Key, Tree0) of
+        {Ticket, Tree} ->
+            {Ticket#new_session_ticket{ticket = Key}, Tree}
+    catch 
+        _:_ ->
+            {invalid, Tree0}
+    end.
+                    
+            

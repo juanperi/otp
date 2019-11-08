@@ -2200,7 +2200,11 @@ handle_pre_shared_key(_, undefined, _) ->
     {ok, undefined};
 handle_pre_shared_key(#state{ssl_options = #{session_tickets := disabled}}, _, _) ->
     {ok, undefined};
-handle_pre_shared_key(#state{handshake_env = #handshake_env{ticket_seed = Seed},
+handle_pre_shared_key(#state{ssl_options = #{session_tickets := stateful}}, _, _) ->
+    
+    {ok, undefined};
+handle_pre_shared_key(#state{ssl_options = #{session_tickets := stateless},
+                             handshake_env = #handshake_env{ticket_seed = Seed},
                              ssl_options = #{anti_replay := BloomFilter}} = State, PreSharedKeys, Cipher) ->
     {IV, Shard} = 
         case Seed of 
