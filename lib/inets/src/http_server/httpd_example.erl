@@ -22,9 +22,9 @@
 -export([print/1]).
 -export([get/2, put/2, post/2, yahoo/2, test1/2, get_bin/2, peer/2,new_status_and_location/2]).
 
--export([newformat/3, post_chunked/3, post_204/3, ignore_invalid_header/3]).
+-export([newformat/3, post_chunked/3, post_204/3, ignore_invalid_header/3, delay/3]).
 %% These are used by the inets test-suite
--export([delay/1, chunk_timeout/3, get_chunks/3]).
+-export([chunk_timeout/3, get_chunks/3]).
 
 
 print(String) ->
@@ -99,7 +99,7 @@ default(Env,Input) ->
    "<B>Environment:</B> ",io_lib:format("~p",[Env]),"<BR>\n",
    "<B>Input:</B> ",Input,"<BR>\n",
    "<B>Parsed Input:</B> ",
-   io_lib:format("~p",[httpd:parse_query(Input)]),"\n",
+   io_lib:format("~p",[uri_string:dissect_query(Input)]),"\n",
    footer()].
 
 peer(Env, _Input) ->
@@ -176,25 +176,16 @@ newformat(SessionID,_,_) ->
  
 %% ------------------------------------------------------
 
-delay(Time) when is_integer(Time) ->
-    i("httpd_example:delay(~p) -> do the delay",[Time]),
-    sleep(Time),
-    i("httpd_example:delay(~p) -> done, now reply",[Time]),
-    delay_reply("delay ok");
-delay(Time) when is_list(Time) ->
-    delay(list_to_integer(Time));
-delay({error,_Reason}) ->
-    i("delay -> called with invalid time"),
-    delay_reply("delay failed: invalid delay time").
+delay(SessionID,_, _) ->
+    sleep(10000),
+    Reply = delay_reply("delay ok"),
+    mod_esi:deliver(SessionID, Reply).
 
 delay_reply(Reply) ->
     [header(),
      top("delay"),
      Reply,
      footer()].
-
-i(F)   -> i(F,[]).
-i(F,A) -> io:format(F ++ "~n",A).
 
 sleep(T) -> receive after T -> ok end.
 

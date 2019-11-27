@@ -625,15 +625,6 @@ Transport: TLS
 	for scripts that use the erl scheme.</p>
       </item>
 
-      <tag><marker id="prop_esi_timeout"></marker>{eval_script_alias, {URLPath, [AllowedModule]}}</tag>
-      <item>
-	<p><c>URLPath = string()</c> and <c>AllowedModule = atom()</c>.
-	Same as <c>erl_script_alias</c> but for scripts
-	using the eval scheme. This is only supported
-	for backwards compatibility. The eval scheme is deprecated.</p>
-      </item>
-    </taglist>
-
     <marker id="props_log"></marker>
     <p><em>Log Properties - Requires mod_log</em></p>
     <taglist>

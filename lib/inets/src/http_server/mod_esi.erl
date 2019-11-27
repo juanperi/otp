@@ -106,16 +106,6 @@ store({erl_script_alias, {Name, Modules}} = Conf, _)
    	    {error, {wrong_type, {erl_script_alias, Error}}}
     end;
 
-store({eval_script_alias, {Name, Modules}} = Conf, _)  
-  when is_list(Name)->
-    try httpd_util:modules_validate(Modules) of
-  	ok ->
-   	    {ok, Conf}
-    catch
-   	throw:Error ->
-   	    {error, {wrong_type, {eval_script_alias, Error}}}
-    end;
-
 store({erl_script_alias, Value}, _) ->
     {error, {wrong_type, {erl_script_alias, Value}}};
 store({erl_script_timeout, TimeoutSec}, _) 
@@ -135,8 +125,6 @@ store({erl_script_nocache, Value}, _) ->
 %%%========================================================================   
 generate_response(ModData) ->
     case scheme(ModData#mod.request_uri, ModData#mod.config_db) of
-	{eval, ESIBody, Modules} ->
-	    eval(ModData, ESIBody, Modules);
 	{erl, ESIBody, Modules} ->
 	    erl(ModData, ESIBody, Modules);
 	no_scheme ->
@@ -146,12 +134,7 @@ generate_response(ModData) ->
 scheme(RequestURI, ConfigDB) ->
     case match_script(RequestURI, ConfigDB, erl_script_alias) of
 	no_match ->
-	    case match_script(RequestURI, ConfigDB, eval_script_alias) of
-		no_match ->
-		    no_scheme;
-		{EsiBody, ScriptModules} ->
-		    {eval, EsiBody, ScriptModules}
-	    end;
+            no_scheme;
 	{EsiBody, ScriptModules} ->
 	    {erl, EsiBody, ScriptModules}
     end.
@@ -176,10 +159,7 @@ match_esi_script(RequestURI, [{Alias,Modules} | Rest], AliasType) ->
     end.
 
 alias_match_str(Alias, erl_script_alias) ->
-    "^" ++ Alias ++ "/";
-alias_match_str(Alias, eval_script_alias) ->
-    "^" ++ Alias ++ "\\?".
-
+    "^" ++ Alias ++ "/".
 
 %%------------------------ Erl mechanism --------------------------------
 
@@ -468,64 +448,3 @@ input_type([$?|_Rest]) ->
 input_type([_First|Rest]) ->
     input_type(Rest).
 
-%%------------------------ Eval mechanism --------------------------------
-
-eval(#mod{request_uri  = ReqUri, 
-	  method       = "PUT",
-	  http_version = Version, 
-	  data         = Data}, _ESIBody, _Modules) ->
-    {proceed,[{status,{501,{"PUT", ReqUri, Version},
-		       ?NICE("Eval mechanism doesn't support method PUT")}}|
-	      Data]};
-
-eval(#mod{request_uri  = ReqUri, 
-	  method       = "DELETE",
-	  http_version = Version, 
-	  data         = Data}, _ESIBody, _Modules) ->
-    {proceed,[{status,{501,{"DELETE", ReqUri, Version},
-		       ?NICE("Eval mechanism doesn't support method DELETE")}}|
-	      Data]};
-
-eval(#mod{request_uri  = ReqUri, 
-	  method       = "POST",
-	  http_version = Version, 
-	  data         = Data}, _ESIBody, _Modules) ->
-    {proceed,[{status,{501,{"POST", ReqUri, Version},
-		       ?NICE("Eval mechanism doesn't support method POST")}}|
-	      Data]};
-
-eval(#mod{method = Method} = ModData, ESIBody, Modules) 
-  when (Method =:= "GET") orelse (Method =:= "HEAD") ->
-    case is_authorized(ESIBody, Modules) of
-	true ->
-	    case generate_webpage(ESIBody) of
-		{error, Reason} ->
-		    {proceed, [{status, {500, none, Reason}} | 
-			       ModData#mod.data]};
-		{ok, Response} ->
-		    {Headers, _} = 
-			httpd_esi:parse_headers(lists:flatten(Response)),
-                    {ok, _, StatusCode} =httpd_esi:handle_headers(Headers), 
-                    {proceed,[{response, {StatusCode, Response}} | 
-                              ModData#mod.data]}
-            end;
-	false ->
-	    {proceed,[{status,
-		       {403, ModData#mod.request_uri,
-			?NICE("Client not authorized to evaluate: "
-			      ++ ESIBody)}} | ModData#mod.data]}
-    end.
-
-generate_webpage(ESIBody) ->
-    (catch erl_eval:eval_str(string:concat(ESIBody,". "))).
-
-is_authorized(_ESIBody, [all]) ->
-    true;
-is_authorized(ESIBody, Modules) ->
-    case re:run(ESIBody, "^[^\:(%3A)]*", [{capture, first}]) of
-	{match, [{Start, Length}]} ->
-	    lists:member(list_to_atom(string:substr(ESIBody, Start+1, Length)),
-			 Modules);
-	nomatch ->
-	    false
-    end.
