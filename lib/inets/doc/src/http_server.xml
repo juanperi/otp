@@ -49,9 +49,7 @@
       </list>
 
     <p>The configuration of the server is provided as an Erlang
-      property list. For backwards compatibility, a configuration
-      file using apache-style configuration directives is
-      supported.</p>
+      property list.</p>
 
     <p>As of <c>Inets</c> 5.0 the HTTP server is an easy to
       start/stop and customize web server providing the most basic
@@ -77,8 +75,6 @@
     <p>The server is configured using an Erlang property list.
       For the available properties, see
       <seealso marker="httpd">httpd(3)</seealso>.
-      For backwards compatibility, apache-like configuration files
-      are also supported.
     </p>
     
     <p>The available configuration properties are as follows:</p>
