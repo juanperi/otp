@@ -956,17 +956,24 @@ prf({3,_N}, PRFAlgo, Secret, Label, Seed, WantedLength) ->
 select_session(SuggestedSessionId, CipherSuites, HashSigns, Compressions, Port, #session{ecc = ECCCurve0} = 
 		   Session, Version,
 	       #{ciphers := UserSuites, honor_cipher_order := HonorCipherOrder} = SslOpts,
-	       Cache, CacheCb, Cert) ->
+	       Cache, CacheCb, Cert0) ->
     {SessionId, Resumed} = ssl_session:server_select_session(Version, Port, SuggestedSessionId,
-                                                             SslOpts, Cert,
+                                                             SslOpts, Cert0,
                                                              Cache, CacheCb),
     case Resumed of
         undefined ->
-	    Suites = available_suites(Cert, UserSuites, Version, HashSigns, ECCCurve0),
+            Certs = case Cert0 of
+                        undefined ->
+                            undefined;
+                        _ ->
+                            [Cert0]
+                    end,
+	    Suites = available_suites(Certs, UserSuites, Version, HashSigns, ECCCurve0),
 	    CipherSuite0 = select_cipher_suite(CipherSuites, Suites, HonorCipherOrder),
-            {ECCCurve, CipherSuite} = cert_curve(Cert, ECCCurve0, CipherSuite0),
+            {Cert, ECCCurve, CipherSuite} = cert_selections(Certs, ECCCurve0, CipherSuite0),
 	    Compression = select_compression(Compressions),
 	    {new, Session#session{session_id = SessionId,
+                                  own_certificate = Cert,
                                   ecc = ECCCurve,
 				  cipher_suite = CipherSuite,
 				  compression_method = Compression}};
@@ -3235,21 +3242,31 @@ handle_renegotiation_info(_RecordCB, ConnectionStates, SecureRenegotation) ->
 	    {ok, ConnectionStates}
     end.
 
-cert_curve(_, _, no_suite) ->
-    {no_curve, no_suite};
-cert_curve(Cert, ECCCurve0, CipherSuite) ->
+cert_selections(Certs, _, no_suite) ->
+    Cert = case Certs of
+               undefined ->
+                   undefined;
+               [Cert0 |_] ->
+                   Cert0
+           end,
+    {Cert, no_curve, no_suite};
+cert_selections(Certs, ECCCurve0, CipherSuite) ->
     case ssl_cipher_format:suite_bin_to_map(CipherSuite) of
         #{key_exchange := Kex} when Kex == ecdh_ecdsa; 
                                     Kex == ecdh_rsa ->
+            Cert = select_cert(Kex, Certs),
             OtpCert = public_key:pkix_decode_cert(Cert, otp),
             TBSCert = OtpCert#'OTPCertificate'.tbsCertificate,
             #'OTPSubjectPublicKeyInfo'{algorithm = AlgInfo} 
                 = TBSCert#'OTPTBSCertificate'.subjectPublicKeyInfo,
             {namedCurve, Oid}  = AlgInfo#'PublicKeyAlgorithm'.parameters,
-            {{namedCurve, Oid}, CipherSuite};
-        _ ->
-            {ECCCurve0, CipherSuite}
+            {Cert, {namedCurve, Oid}, CipherSuite};
+        #{key_exchange := Kex}  ->
+            Cert = select_cert(Kex, Certs),
+            {Cert, ECCCurve0, CipherSuite}
     end.
+select_cert(_Kex, Certs)->
+    hd(Certs).
 
 empty_extensions() ->
      #{}.

@@ -522,17 +522,21 @@ rsa_suites(N) when N =< 4 ->
 %%-------------------------------------------------------------------
 filter(undefined, Ciphers, _) -> 
     Ciphers;
-filter(DerCert, Ciphers0, Version) ->
-    OtpCert = public_key:pkix_decode_cert(DerCert, otp),
-    SigAlg = OtpCert#'OTPCertificate'.signatureAlgorithm,
-    PubKeyInfo = OtpCert#'OTPCertificate'.tbsCertificate#'OTPTBSCertificate'.subjectPublicKeyInfo,
-    PubKeyAlg = PubKeyInfo#'OTPSubjectPublicKeyInfo'.algorithm,
-
-    Ciphers = filter_suites_pubkey(
-                ssl_certificate:public_key_type(PubKeyAlg#'PublicKeyAlgorithm'.algorithm),
-                Ciphers0, Version, OtpCert),
-    {_, Sign} = public_key:pkix_sign_types(SigAlg#'SignatureAlgorithm'.algorithm),
-    filter_suites_signature(Sign, Ciphers, Version).
+filter([_|_] = DerCerts, Ciphers0, Version)->
+    Fun = fun(DerCert, [PubAcc, SignAcc]) ->
+                  OtpCert = public_key:pkix_decode_cert(DerCert, otp),
+                  SigAlg = OtpCert#'OTPCertificate'.signatureAlgorithm,
+                  PubKeyInfo = OtpCert#'OTPCertificate'.tbsCertificate#'OTPTBSCertificate'.subjectPublicKeyInfo,
+                  PubKeyAlg = PubKeyInfo#'OTPSubjectPublicKeyInfo'.algorithm,   
+                  {_, Sign} = public_key:pkix_sign_types(SigAlg#'SignatureAlgorithm'.algorithm),
+                  Pub = ssl_certificate:public_key_type(PubKeyAlg#'PublicKeyAlgorithm'.algorithm),
+                  [[{Pub, OtpCert} | PubAcc], [Sign| SignAcc]]
+          end,
+    do_filter(lists:foldl(Fun, [[],[]], DerCerts), Ciphers0, Version).
+    
+do_filter([Pubs, Signs], Ciphers0, Version) ->
+    Ciphers = filter_suites_pubkey(Pubs, Ciphers0),
+    filter_suites_signature(Signs, Ciphers, Version).
 
 %%--------------------------------------------------------------------
 -spec filter_suites([ssl:erl_cipher_suite()] | [ssl_cipher_format:cipher_suite()], map()) ->
@@ -1123,7 +1127,13 @@ next_iv(Bin, IV) ->
     <<_:FirstPart/binary, NextIV:IVSz/binary>> = Bin,
     NextIV.
 
-filter_suites_pubkey(rsa, CiphersSuites0, _Version, OtpCert) ->
+filter_suites_pubkey(Pubs, CipherSuites)->
+    Fun = fun({Alg, OtpCert}) -> 
+               filter_suites_pubkey(Alg, CipherSuites, OtpCert)
+          end,
+    lists:flatmap(Fun, Pubs).
+
+filter_suites_pubkey(rsa, CiphersSuites0, OtpCert) ->
     KeyUses = key_uses(OtpCert),
     NotECDSAKeyed = (CiphersSuites0 -- ec_keyed_suites(CiphersSuites0)) 
         -- dss_keyed_suites(CiphersSuites0),
@@ -1132,12 +1142,12 @@ filter_suites_pubkey(rsa, CiphersSuites0, _Version, OtpCert) ->
                                          rsa_suites_encipher(CiphersSuites0)),
     filter_keyuse_suites(digitalSignature, KeyUses, CiphersSuites,
                          rsa_ecdhe_dhe_suites(CiphersSuites));
-filter_suites_pubkey(dsa, Ciphers, _, OtpCert) ->  
+filter_suites_pubkey(dsa, Ciphers, OtpCert) ->  
     KeyUses = key_uses(OtpCert),
     NotECRSAKeyed =  (Ciphers -- rsa_keyed_suites(Ciphers)) -- ec_keyed_suites(Ciphers),
     filter_keyuse_suites(digitalSignature, KeyUses, NotECRSAKeyed,
                          dss_dhe_suites(Ciphers));
-filter_suites_pubkey(ec, Ciphers, _, OtpCert) ->
+filter_suites_pubkey(ec, Ciphers, OtpCert) ->
     Uses = key_uses(OtpCert),
     NotRSADSAKeyed = (Ciphers -- rsa_keyed_suites(Ciphers)) -- dss_keyed_suites(Ciphers),
     CiphersSuites = filter_keyuse_suites(digitalSignature, Uses, NotRSADSAKeyed,
@@ -1146,13 +1156,17 @@ filter_suites_pubkey(ec, Ciphers, _, OtpCert) ->
 
 filter_suites_signature(_, Ciphers, {3, N}) when N >= 3 ->
      Ciphers;
-filter_suites_signature(rsa, Ciphers, Version) ->
-    (Ciphers -- ecdsa_signed_suites(Ciphers, Version)) -- dsa_signed_suites(Ciphers, Version);
-filter_suites_signature(dsa, Ciphers, Version) ->
-    (Ciphers -- ecdsa_signed_suites(Ciphers, Version)) -- rsa_signed_suites(Ciphers, Version);
-filter_suites_signature(ecdsa, Ciphers, Version) ->
-    (Ciphers -- rsa_signed_suites(Ciphers, Version)) -- dsa_signed_suites(Ciphers, Version).
+filter_suites_signature([_|_] = Signatures, Ciphers, Version) ->
+    do_filter_suites_signature([rsa, dsa, ecdsa] -- Signatures, Ciphers, Version).
 
+do_filter_suites_signature([], Ciphers, _) ->
+    Ciphers;
+do_filter_suites_signature([rsa | Rest], Ciphers, Version) ->
+    do_filter_suites_signature(Rest, Ciphers -- rsa_signed_suites(Ciphers, Version), Version); 
+do_filter_suites_signature([dsa | Rest], Ciphers, Version) ->
+    do_filter_suites_signature(Rest, Ciphers -- dsa_signed_suites(Ciphers, Version), Version); 
+do_filter_suites_signature([ecdsa | Rest], Ciphers, Version) ->
+    do_filter_suites_signature(Rest, Ciphers -- ecdsa_signed_suites(Ciphers, Version), Version).
 
 %% From RFC 5246 - Section  7.4.2.  Server Certificate
 %% If the client provided a "signature_algorithms" extension, then all
