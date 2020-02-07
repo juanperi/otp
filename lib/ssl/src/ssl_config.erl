@@ -29,20 +29,16 @@
 -export([init/2]).
 
 init(#{erl_dist := ErlDist,
-       key := Key,
-       keyfile := KeyFile,
-       password := Password,
        dh := DH,
        dhfile := DHFile} = SslOpts, Role) ->
     
     init_manager_name(ErlDist),
 
-    {ok, #{pem_cache := PemCache} = Config} 
+    {ok, #{pem_cache := PemCache} = Config0} 
 	= init_certificates(SslOpts, Role),
-    PrivateKey =
-	init_private_key(PemCache, Key, KeyFile, Password, Role),
-    DHParams = init_diffie_hellman(PemCache, DH, DHFile, Role),
-    {ok, Config#{private_key => PrivateKey, dh_params => DHParams}}.
+    {ok, Config}  = init_private_keys(SslOpts, Role, Config0),
+        DHParams = init_diffie_hellman(PemCache, DH, DHFile, Role),
+    {ok, Config#{dh_params => DHParams}}.
 
 init_manager_name(false) ->
     put(ssl_manager, ssl_manager:name(normal)),
@@ -73,28 +69,29 @@ init_certificates(#{cacerts := CaCerts,
     init_certificates(Cert, Config, CertFile, Role).
 
 init_certificates(undefined, Config, <<>>, _) ->
-    {ok, Config#{own_certificate => undefined}};
+    {ok, Config#{own_certificates => undefined}};
 
 init_certificates(undefined, #{pem_cache := PemCache} = Config, CertFile, client) ->
     try 
 	%% Ignoring potential proxy-certificates see: 
 	%% http://dev.globus.org/wiki/Security/ProxyFileFormat
 	[OwnCert|_] = ssl_certificate:file_to_certificats(CertFile, PemCache),
-	{ok, Config#{own_certificate => OwnCert}}
+	{ok, Config#{own_certificates => [OwnCert]}}
     catch _Error:_Reason  ->
-	    {ok, Config#{own_certificate => undefined}}
+	    {ok, Config#{own_certificates => undefined}}
     end; 
 
 init_certificates(undefined, #{pem_cache := PemCache} = Config, CertFile, server) ->
     try
 	[OwnCert|_] = ssl_certificate:file_to_certificats(CertFile, PemCache),
-	{ok, Config#{own_certificate => OwnCert}}
+	{ok, Config#{own_certificates => [OwnCert]}}
     catch
 	_:Reason ->
 	    file_error(CertFile, {certfile, Reason})	    
     end;
 init_certificates(Cert, Config, _, _) ->
-    {ok, Config#{own_certificate => Cert}}.
+    {ok, Config#{own_certificates => [Cert]}}.
+
 init_private_key(_, #{algorithm := Alg} = Key, _, _Password, _Client) when Alg == ecdsa;
                                                                            Alg == rsa;
                                                                            Alg == dss ->
@@ -176,3 +173,56 @@ init_diffie_hellman(DbHandle,_, DHParamFile, server) ->
 	_:Reason ->
 	    file_error(DHParamFile, {dhfile, Reason}) 
     end.
+
+
+init_private_keys(#{key := Key,
+                    keyfile := KeyFile,
+                    password := Password}, Role,
+                  #{pem_cache := PemCache,
+                   own_certificates := Certs} = Config) -> 
+    PrivKey = init_private_key(PemCache, Key, KeyFile, Password, Role),
+    PrivKeys = maybe_map_cert_keys(PrivKey, Certs),
+    {ok, Config#{private_keys => PrivKeys}}.
+    
+maybe_map_cert_keys(undefined, _) ->
+    undefined;
+maybe_map_cert_keys(Key, [Cert]) ->
+    map_cert_keys([{Cert, Key}]).
+
+map_cert_keys(CertKeys) ->
+    map_cert_keys(CertKeys, #{}).
+
+map_cert_keys([], Acc) ->
+    Acc;
+map_cert_keys([{Cert, {Type, Key}} | Rest], Acc) ->
+    PrivKey = init_private_key(Type, Key),
+    {ok, Id} = public_key:pkix_issuer_id(Cert, self),
+    map_cert_keys(Rest, Acc#{Id => PrivKey});
+map_cert_keys([{Cert, Key} | Rest], Acc) ->
+    {ok, Id} = public_key:pkix_issuer_id(Cert, self),
+    map_cert_keys(Rest, Acc#{Id => Key}).
+
+%% If multiple cert and keys are inputed via a PEM file they are
+%% hopefully provided in the same order but PEM files do have a given
+%% order so we have to make sure we have a orderd list.
+sort_cert_keys([], [], _, _, Acc) ->
+    Acc;
+sort_cert_keys([_|_], [], [], Opt, _) ->
+    throw({options, {{certs_and_kyes, Opt}, key_cert_mismatch}});
+sort_cert_keys([_|_]= Certs, [], UnUsedKeys = [_|_], Opt, Acc) ->
+    case length(Certs) == length(UnUsedKeys) of
+        true ->
+            throw({options, {{certs_and_kyes, Opt}, key_cert_mismatch}});
+        false ->
+            sort_cert_keys(Certs, UnUsedKeys, [], Opt, Acc)
+    end;
+sort_cert_keys([Cert | Certs], [Key | Keys], UnUsedKeys, Opt, Acc) ->
+    case is_cert_key(Cert, Key) of
+        true ->
+            sort_cert_keys(Certs,  Keys,  UnUsedKeys, Opt, [{Cert, Key} | Acc]);
+        false  ->
+            sort_cert_keys([Cert | Certs], Keys, [Key| UnUsedKeys], Opt,  Acc)
+    end.
+
+is_cert_key(_Cert, _Key) ->
+    ture.

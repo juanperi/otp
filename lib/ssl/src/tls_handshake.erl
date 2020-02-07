@@ -36,7 +36,7 @@
 -include_lib("kernel/include/logger.hrl").
 
 %% Handshake handling
--export([client_hello/9, hello/4]).
+-export([client_hello/6, hello/4]).
 
 %% Handshake encoding
 -export([encode_handshake/2]).
@@ -50,19 +50,19 @@
 %% Handshake handling
 %%====================================================================
 %%--------------------------------------------------------------------
--spec client_hello(ssl:host(), inet:port_number(), ssl_record:connection_states(),
-		   ssl_options(), binary(), boolean(), der_cert(),
+-spec client_hello(ssl_record:connection_states(),
+		   ssl_options(), binary(), boolean(), 
                    #key_share_client_hello{} | undefined, tuple() | undefined) ->
 			  #client_hello{}.
 %%
 %% Description: Creates a client hello message.
 %%--------------------------------------------------------------------
-client_hello(_Host, _Port, ConnectionStates,
+client_hello(ConnectionStates,
 	     #{versions := Versions,
                ciphers := UserSuites,
                fallback := Fallback
               } = SslOpts,
-	     Id, Renegotiation, _OwnCert, KeyShare, TicketData) ->
+	     Id, Renegotiation, KeyShare, TicketData) ->
     Version = tls_record:highest_protocol_version(Versions),
 
     %% In TLS 1.3, the client indicates its version preferences in the
@@ -294,7 +294,7 @@ handle_client_hello(Version,
                       signature_algs := SupportedHashSigns,
                       eccs := SupportedECCs,
                       honor_ecc_order := ECCOrder} = SslOpts,
-		    {Port, Session0, Cache, CacheCb, ConnectionStates0, Cert, _}, 
+		    {Port, Session0, Cache, CacheCb, ConnectionStates0, Certs, _}, 
                     Renegotiation) ->
     case tls_record:is_acceptable_version(Version, Versions) of
 	true ->
@@ -302,13 +302,13 @@ handle_client_hello(Version,
             ClientHashSigns = maps:get(signature_algs, HelloExt, undefined),
             ClientSignatureSchemes = maps:get(signature_algs_cert, HelloExt, undefined),
 	    AvailableHashSigns = ssl_handshake:available_signature_algs(
-				   ClientHashSigns, SupportedHashSigns, Cert, Version),
-	    ECCCurve = ssl_handshake:select_curve(Curves, SupportedECCs, ECCOrder),
-	    {Type, #session{cipher_suite = CipherSuite} = Session1}
+				   ClientHashSigns, SupportedHashSigns, Certs, Version),
+	    ECCCurve = ssl_handshake:select_curve(Curves, SupportedECCs, ECCOrder),    
+	    {Type, #session{cipher_suite = CipherSuite, own_certificate = Cert} = Session1}
 		= ssl_handshake:select_session(SugesstedId, CipherSuites, 
                                                AvailableHashSigns, Compressions,
 					       Port, Session0#session{ecc = ECCCurve}, 
-                                               Version, SslOpts, Cache, CacheCb, Cert),
+                                               Version, SslOpts, Cache, CacheCb, Certs),
 	    case CipherSuite of 
 		no_suite ->
                     ?ALERT_REC(?FATAL, ?INSUFFICIENT_SECURITY, no_suitable_ciphers);

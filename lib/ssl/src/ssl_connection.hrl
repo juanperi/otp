@@ -89,7 +89,9 @@
                           terminated = false                          ::boolean() | closed,  
                           negotiated_version    :: ssl_record:ssl_version() | 'undefined',
                           erl_dist_handle = undefined :: erlang:dist_handle() | 'undefined',
-                          private_key          :: public_key:private_key() | secret_printout() | 'undefined'
+                          private_keys          :: #{} | secret_printout() | 'undefined',  %% map {public_key::cert_id() => public_key::private_key()}
+                          certs                :: [der_cert()]                        
+                                                    
                         }).
 
 -record(state, {

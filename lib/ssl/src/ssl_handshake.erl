@@ -956,22 +956,16 @@ prf({3,_N}, PRFAlgo, Secret, Label, Seed, WantedLength) ->
 select_session(SuggestedSessionId, CipherSuites, HashSigns, Compressions, Port, #session{ecc = ECCCurve0} = 
 		   Session, Version,
 	       #{ciphers := UserSuites, honor_cipher_order := HonorCipherOrder} = SslOpts,
-	       Cache, CacheCb, Cert0) ->
+	       Cache, CacheCb, Certs) ->
     {SessionId, Resumed} = ssl_session:server_select_session(Version, Port, SuggestedSessionId,
-                                                             SslOpts, Cert0,
+                                                             SslOpts, Certs,  
                                                              Cache, CacheCb),
     case Resumed of
         undefined ->
-            Certs = case Cert0 of
-                        undefined ->
-                            undefined;
-                        _ ->
-                            [Cert0]
-                    end,
 	    Suites = available_suites(Certs, UserSuites, Version, HashSigns, ECCCurve0),
 	    CipherSuite0 = select_cipher_suite(CipherSuites, Suites, HonorCipherOrder),
             {Cert, ECCCurve, CipherSuite} = cert_selections(Certs, ECCCurve0, CipherSuite0),
-	    Compression = select_compression(Compressions),
+   	    Compression = select_compression(Compressions),
 	    {new, Session#session{session_id = SessionId,
                                   own_certificate = Cert,
                                   ecc = ECCCurve,
@@ -1397,7 +1391,6 @@ select_hashsign({#hash_sign_algos{hash_sign_algos = ClientHashSigns},
     {SignAlgo0, Param, PublicKeyAlgo0} = get_cert_params(Cert),
     SignAlgo = sign_algo(SignAlgo0),
     PublicKeyAlgo = public_key_algo(PublicKeyAlgo0),
-
     %% RFC 5246 (TLS 1.2)
     %% If the client provided a "signature_algorithms" extension, then all
     %% certificates provided by the server MUST be signed by a
@@ -2083,7 +2076,7 @@ encode_server_key(#server_ecdhe_psk_params{
     <<?UINT16(Len), PskIdentityHint/binary,
       ?BYTE(?NAMED_CURVE), ?UINT16((tls_v1:oid_to_enum(ECCurve))),
       ?BYTE(KLen), ECPubKey/binary>>;
-encode_server_key(#server_srp_params{srp_n = N, srp_g = G,	srp_s = S, srp_b = B}) ->
+encode_server_key(#server_srp_params{srp_n = N, srp_g = G, srp_s = S, srp_b = B}) ->
     NLen = byte_size(N),
     GLen = byte_size(G),
     SLen = byte_size(S),
@@ -3242,14 +3235,17 @@ handle_renegotiation_info(_RecordCB, ConnectionStates, SecureRenegotation) ->
 	    {ok, ConnectionStates}
     end.
 
-cert_selections(Certs, _, no_suite) ->
+%%TODO
+cert_selections(undefined, EccCurve, CipherSuite) ->
+    {undefined, EccCurve, CipherSuite};
+cert_selections(Certs, EccCurve, no_suite) ->
     Cert = case Certs of
                undefined ->
                    undefined;
                [Cert0 |_] ->
                    Cert0
            end,
-    {Cert, no_curve, no_suite};
+    {Cert, EccCurve, no_suite};
 cert_selections(Certs, ECCCurve0, CipherSuite) ->
     case ssl_cipher_format:suite_bin_to_map(CipherSuite) of
         #{key_exchange := Kex} when Kex == ecdh_ecdsa; 
@@ -3265,8 +3261,13 @@ cert_selections(Certs, ECCCurve0, CipherSuite) ->
             Cert = select_cert(Kex, Certs),
             {Cert, ECCCurve0, CipherSuite}
     end.
-select_cert(_Kex, Certs)->
-    hd(Certs).
+select_cert(Kex, Certs)->
+    case ssl_connection:is_anonymous(Kex) of
+        true ->
+            undefined;
+        false ->
+            hd(Certs)
+        end.
 
 empty_extensions() ->
      #{}.

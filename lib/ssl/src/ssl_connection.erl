@@ -41,7 +41,7 @@
 
 -export([connect/8, handshake/7, handshake/2, handshake/3, handle_common_event/5,
          handshake_continue/3, handshake_cancel/1,
-	 socket_control/4, socket_control/5]).
+	 socket_control/4, socket_control/5, get_private_key/2]).
 
 %% User Events 
 -export([send/2, recv/3, close/2, shutdown/2,
@@ -60,7 +60,7 @@
 
 %% Help functions for tls|dtls_connection.erl
 -export([handle_session/7, ssl_config/3,
-	 prepare_connection/2, hibernate_after/3]).
+	 prepare_connection/2, hibernate_after/3, is_anonymous/1]).
 
 %% General gen_statem state functions with extra callback argument 
 %% to determine if it is an SSL/TLS or DTLS gen_statem machine
@@ -200,6 +200,15 @@ socket_control(dtls_connection = Connection, {_, Socket}, [Pid|_] = Pids, Transp
 	    {error, Reason}
     end.
 
+%--------------------------------------------------------------------
+%% TODO
+%%-spec get_private_key(Cert, map()) -> public_key:private_key().
+%--------------------------------------------------------------------
+get_private_key(undefined, _) ->
+    undefined;
+get_private_key(Cert, PrivateKeys) ->
+    {ok, IssuerId} = public_key:pkix_issuer_id(Cert, self),
+    maps:get(IssuerId, PrivateKeys).
 
 %%====================================================================
 %% User events
@@ -787,15 +796,14 @@ ssl_config(Opts, Role, #state{static_env = InitStatEnv0,
            fileref_db_handle := FileRefHandle, 
            session_cache := CacheHandle, 
            crl_db_info := CRLDbHandle,
-           private_key := Key,
+           private_keys := CertKeyMap,
            dh_params := DHParams,
-           own_certificate := OwnCert}} =
+           own_certificates := OwnCerts}} =
 	ssl_config:init(Opts, Role), 
     TimeStamp = erlang:monotonic_time(),
     Session = State0#state.session,
     
-    State0#state{session = Session#session{own_certificate = OwnCert,
-                                           time_stamp = TimeStamp},
+    State0#state{session = Session#session{time_stamp = TimeStamp},
                  static_env = InitStatEnv0#static_env{
                                 file_ref_db = FileRefHandle,
                                 cert_db_ref = Ref,
@@ -804,7 +812,8 @@ ssl_config(Opts, Role, #state{static_env = InitStatEnv0,
                                 session_cache = CacheHandle
                                },
                  handshake_env = HsEnv#handshake_env{diffie_hellman_params = DHParams},
-                 connection_env = CEnv#connection_env{private_key = Key},
+                 connection_env = CEnv#connection_env{private_keys = CertKeyMap,
+                                                      certs = OwnCerts},
                  ssl_options = Opts}.
 
 %%====================================================================
@@ -1010,6 +1019,7 @@ certify(internal, #server_key_exchange{exchange_keys = Keys},
 	       connection_states = ConnectionStates} = State, Connection)
   when KexAlg == dhe_dss; 
        KexAlg == dhe_rsa;
+       KexAlg == ecdh_rsa;
        KexAlg == ecdhe_rsa; 
        KexAlg == ecdhe_ecdsa;
        KexAlg == dh_anon; 
@@ -1826,11 +1836,12 @@ verify_client_cert(#state{static_env = #static_env{role = client},
                           handshake_env = #handshake_env{tls_handshake_history = Hist,
                                                          cert_hashsign_algorithm = HashSign},
                           connection_env = #connection_env{negotiated_version = Version,
-                                                           private_key = PrivateKey},
+                                                           private_keys = PrivateKeys},
                           client_certificate_requested = true,
 			  session = #session{master_secret = MasterSecret,
 					     own_certificate = OwnCert}} = State, Connection) ->
 
+    PrivateKey = get_private_key(OwnCert, PrivateKeys),
     case ssl_handshake:client_certificate_verify(OwnCert, MasterSecret,
 						 ssl:tls_version(Version), HashSign, PrivateKey, Hist) of
         #certificate_verify{} = Verified ->
@@ -1868,14 +1879,16 @@ server_certify_and_key_exchange(State0, Connection) ->
     request_client_cert(State2, Connection).
 
 certify_client_key_exchange(#encrypted_premaster_secret{premaster_secret= EncPMS},
-			    #state{connection_env = #connection_env{private_key = Key}, 
-                                   handshake_env = #handshake_env{client_hello_version = {Major, Minor} = Version}}
+			    #state{connection_env = #connection_env{private_keys = Keys}, 
+                                   handshake_env = #handshake_env{client_hello_version = {Major, Minor} = Version},
+                                   session = #session{own_certificate = OwnCert}}
                             = State, Connection) ->
+    PrivateKey = get_private_key(OwnCert, Keys),
     FakeSecret = make_premaster_secret(Version, rsa),
     %% Countermeasure for Bleichenbacher attack always provide some kind of premaster secret
     %% and fail handshake later.RFC 5246 section 7.4.7.1.
     PremasterSecret =
-        try ssl_handshake:premaster_secret(EncPMS, Key) of
+        try ssl_handshake:premaster_secret(EncPMS, PrivateKey) of
             Secret when erlang:byte_size(Secret) == ?NUM_OF_PREMASTERSECRET_BYTES ->
                 case Secret of
                     <<?BYTE(Major), ?BYTE(Minor), Rest/binary>> -> %% Correct
@@ -1926,11 +1939,14 @@ certify_client_key_exchange(#client_ecdhe_psk_identity{} = ClientKey,
 	ssl_handshake:premaster_secret(ClientKey, ServerEcDhPrivateKey, PSKLookup),
     calculate_master_secret(PremasterSecret, State, Connection, certify, cipher);
 certify_client_key_exchange(#client_rsa_psk_identity{} = ClientKey,
-			    #state{connection_env = #connection_env{private_key = Key},
+			    #state{connection_env = #connection_env{private_keys = Keys},
 				   ssl_options = 
-				       #{user_lookup_fun := PSKLookup}} = State0,
+				       #{user_lookup_fun := PSKLookup},
+                                   session = #session{own_certificate = OwnCert}
+                                  } = State0,
 			    Connection) ->
-    PremasterSecret = ssl_handshake:premaster_secret(ClientKey, Key, PSKLookup),
+    PrivateKey = get_private_key(rsa_psk, OwnCert, Keys),
+    PremasterSecret = ssl_handshake:premaster_secret(ClientKey, PrivateKey, PSKLookup),
     calculate_master_secret(PremasterSecret, State0, Connection, certify, cipher);
 certify_client_key_exchange(#client_srp_public{} = ClientKey,
 			    #state{handshake_env = #handshake_env{srp_params = Params,
@@ -1965,7 +1981,8 @@ key_exchange(#state{static_env = #static_env{role = server},
                                                    diffie_hellman_params = #'DHParameter'{} = Params,
                                                    hashsign_algorithm = HashSignAlgo},
                     connection_env = #connection_env{negotiated_version = Version,
-                                                     private_key = PrivateKey},
+                                                     private_keys = PrivateKeys},
+                    session = #session{own_certificate = OwnCert},
 		    connection_states = ConnectionStates0} = State0, Connection)
   when KexAlg == dhe_dss;
        KexAlg == dhe_rsa;
@@ -1975,54 +1992,51 @@ key_exchange(#state{static_env = #static_env{role = server},
 	ssl_record:pending_connection_state(ConnectionStates0, read),
     #security_parameters{client_random = ClientRandom,
 			 server_random = ServerRandom} = SecParams,
+    PrivateKey = get_private_key(KexAlg, OwnCert, PrivateKeys),
     Msg = ssl_handshake:key_exchange(server, ssl:tls_version(Version), {dh, DHKeys, Params,
 					       HashSignAlgo, ClientRandom,
 					       ServerRandom,
 					       PrivateKey}),
     #state{handshake_env = HsEnv} = State = Connection:queue_handshake(Msg, State0),
     State#state{handshake_env = HsEnv#handshake_env{kex_keys = DHKeys}};
-key_exchange(#state{static_env = #static_env{role = server},
-                    handshake_env = #handshake_env{kex_algorithm = KexAlg} = HsEnv,
-                    connection_env = #connection_env{private_key = #'ECPrivateKey'{parameters = ECCurve} = Key},
-                   session = Session} = State, _)
-  when KexAlg == ecdh_ecdsa; 
-       KexAlg == ecdh_rsa ->
-    State#state{handshake_env = HsEnv#handshake_env{kex_keys = Key},
-                session = Session#session{ecc = ECCurve}};
 key_exchange(#state{static_env = #static_env{role = server}, 
                     handshake_env = #handshake_env{kex_algorithm = KexAlg,
                                                    hashsign_algorithm = HashSignAlgo},
                     connection_env = #connection_env{negotiated_version = Version,
-                                                     private_key = PrivateKey},
-		    session = #session{ecc = ECCCurve},
+                                                     private_keys = PrivateKeys},
+		    session = #session{ecc = ECCCurve0, own_certificate = OwnCert},
 		    connection_states = ConnectionStates0} = State0, Connection)
   when KexAlg == ecdhe_ecdsa; 
        KexAlg == ecdhe_rsa;
+       KexAlg == ecdh_rsa;
        KexAlg == ecdh_anon ->
-
-    ECDHKeys = public_key:generate_key(ECCCurve),
+    PrivateKey = get_private_key(KexAlg, OwnCert, PrivateKeys),
+    ECDHKeys = public_key:generate_key(ECCCurve0),
     #{security_parameters := SecParams} = 
-	ssl_record:pending_connection_state(ConnectionStates0, read),
+        ssl_record:pending_connection_state(ConnectionStates0, read),
     #security_parameters{client_random = ClientRandom,
-			 server_random = ServerRandom} = SecParams,
+                         server_random = ServerRandom} = SecParams,
     Msg =  ssl_handshake:key_exchange(server, ssl:tls_version(Version), 
-				      {ecdh, ECDHKeys,
-				       HashSignAlgo, ClientRandom,
-				       ServerRandom,
-				       PrivateKey}),
+                                      {ecdh, ECDHKeys,
+                                       HashSignAlgo, ClientRandom,
+                                       ServerRandom,
+                                       PrivateKey}),
     #state{handshake_env = HsEnv} = State = Connection:queue_handshake(Msg, State0),
     State#state{handshake_env = HsEnv#handshake_env{kex_keys = ECDHKeys}};
+
 key_exchange(#state{static_env = #static_env{role = server}, 
                     handshake_env = #handshake_env{kex_algorithm = psk},
 		    ssl_options = #{psk_identity := undefined}} = State, _) ->
     State;
 key_exchange(#state{static_env = #static_env{role = server}, 
 		    ssl_options = #{psk_identity := PskIdentityHint},
-		    handshake_env = #handshake_env{kex_algorithm = psk,
+		    handshake_env = #handshake_env{kex_algorithm = psk = Kex,
                                                    hashsign_algorithm = HashSignAlgo},     
                     connection_env = #connection_env{negotiated_version = Version,
-                                                     private_key = PrivateKey},
-             connection_states = ConnectionStates0} = State0, Connection) ->
+                                                     private_keys = Keys},
+                    session = #session{own_certificate = OwnCert},
+                    connection_states = ConnectionStates0} = State0, Connection) ->
+    PrivateKey = get_private_key(Kex, OwnCert, Keys),
     #{security_parameters := SecParams} = 
 	ssl_record:pending_connection_state(ConnectionStates0, read),
     #security_parameters{client_random = ClientRandom,
@@ -2035,13 +2049,15 @@ key_exchange(#state{static_env = #static_env{role = server},
     Connection:queue_handshake(Msg, State0);
 key_exchange(#state{static_env = #static_env{role = server},                    
 		    ssl_options = #{psk_identity := PskIdentityHint},
-		    handshake_env = #handshake_env{kex_algorithm = dhe_psk,
+		    handshake_env = #handshake_env{kex_algorithm = dhe_psk = Kex,
                                                    diffie_hellman_params = #'DHParameter'{} = Params,
                                                    hashsign_algorithm = HashSignAlgo},                                        
                     connection_env = #connection_env{negotiated_version = Version,
-                                                     private_key = PrivateKey},
+                                                     private_keys = Keys},
+                    session = #session{own_certificate = OwnCert},
 		    connection_states = ConnectionStates0
 		   } = State0, Connection) ->
+    PrivateKey = get_private_key(Kex, OwnCert, Keys),
     DHKeys = public_key:generate_key(Params),
     #{security_parameters := SecParams} =
 	ssl_record:pending_connection_state(ConnectionStates0, read),
@@ -2057,13 +2073,14 @@ key_exchange(#state{static_env = #static_env{role = server},
     State#state{handshake_env = HsEnv#handshake_env{kex_keys = DHKeys}};
 key_exchange(#state{static_env = #static_env{role = server}, 
 		    ssl_options = #{psk_identity := PskIdentityHint},
-                    handshake_env = #handshake_env{kex_algorithm = ecdhe_psk,
+                    handshake_env = #handshake_env{kex_algorithm = ecdhe_psk = Kex,
                                                    hashsign_algorithm = HashSignAlgo},
                     connection_env = #connection_env{negotiated_version = Version,
-                                                     private_key = PrivateKey},
-                    session = #session{ecc = ECCCurve},
+                                                     private_keys = Keys},
+                    session = #session{ecc = ECCCurve, own_certificate = OwnCert},
 		    connection_states = ConnectionStates0
 		   } = State0, Connection) ->
+    PrivateKey = get_private_key(Kex, OwnCert, Keys),
     ECDHKeys = public_key:generate_key(ECCCurve),
     #{security_parameters := SecParams} =
 	ssl_record:pending_connection_state(ConnectionStates0, read),
@@ -2083,12 +2100,15 @@ key_exchange(#state{static_env = #static_env{role = server},
     State;
 key_exchange(#state{static_env = #static_env{role = server}, 
 		    ssl_options = #{psk_identity := PskIdentityHint},
-                    handshake_env = #handshake_env{kex_algorithm = rsa_psk,
+                    handshake_env = #handshake_env{kex_algorithm = rsa_psk = Kex,
                                                    hashsign_algorithm = HashSignAlgo}, 
                     connection_env = #connection_env{negotiated_version = Version,
-                                                     private_key = PrivateKey},
-		    connection_states = ConnectionStates0
-		   } = State0, Connection) ->
+                                                     private_keys = Keys},
+                    session = #session{own_certificate = OwnCert},
+                    connection_states = ConnectionStates0
+            } = State0, Connection) ->
+
+    PrivateKey = get_private_key(Kex, OwnCert, Keys),
     #{security_parameters := SecParams} =
 	ssl_record:pending_connection_state(ConnectionStates0, read),
     #security_parameters{client_random = ClientRandom,
@@ -2104,8 +2124,9 @@ key_exchange(#state{static_env = #static_env{role = server},
                     handshake_env = #handshake_env{kex_algorithm = KexAlg,
                                                    hashsign_algorithm = HashSignAlgo}, 
                     connection_env = #connection_env{negotiated_version = Version,
-                                                     private_key = PrivateKey},
-		    session = #session{srp_username = Username},
+                                                     private_keys = PrivKeys},
+		    session = #session{srp_username = Username,
+                                       own_certificate = OwnCert},
 		    connection_states = ConnectionStates0
 		   } = State0, Connection)
   when KexAlg == srp_dss;
@@ -2118,6 +2139,7 @@ key_exchange(#state{static_env = #static_env{role = server},
 	       Keys0 = {_,_} ->
 		   Keys0
 	   end,
+    PrivateKey = get_private_key(KexAlg, OwnCert, PrivKeys),
     #{security_parameters := SecParams} =
 	ssl_record:pending_connection_state(ConnectionStates0, read),
     #security_parameters{client_random = ClientRandom,
@@ -2138,6 +2160,7 @@ key_exchange(#state{static_env = #static_env{role = client},
 		   } = State0, Connection) ->
     Msg = rsa_key_exchange(ssl:tls_version(Version), PremasterSecret, PublicKeyInfo),
     Connection:queue_handshake(Msg, State0);
+
 key_exchange(#state{static_env = #static_env{role = client},
                     handshake_env = #handshake_env{kex_algorithm = KexAlg,
                                                    kex_keys = {DhPubKey, _}},
@@ -2167,7 +2190,7 @@ key_exchange(#state{static_env = #static_env{role = client},
                     connection_env = #connection_env{negotiated_version = Version},
 		    ssl_options = #{psk_identity := PSKIdentity}} = State0, Connection) ->
     Msg =  ssl_handshake:key_exchange(client, ssl:tls_version(Version), 
-				      {psk, PSKIdentity}),
+				      {psk, PSKIdentity}),    
     Connection:queue_handshake(Msg, State0);
 key_exchange(#state{static_env = #static_env{role = client},
                     handshake_env = #handshake_env{kex_algorithm = dhe_psk,
@@ -2482,7 +2505,6 @@ is_anonymous(KexAlg) when KexAlg == dh_anon;
                           KexAlg == psk;
                           KexAlg == dhe_psk;
                           KexAlg == ecdhe_psk;
-                          KexAlg == rsa_psk;
                           KexAlg == srp_anon ->
     true;
 is_anonymous(_) ->
@@ -2735,9 +2757,12 @@ host_id(_, Host, _) ->
 
 handle_new_session(NewId, CipherSuite, Compression, 
 		   #state{static_env = #static_env{protocol_cb = Connection},
+                          connection_env = #connection_env{certs = Certs},
                           session = Session0
 			 } = State0) ->
+    Cert = select_client_cert(Certs),
     Session = Session0#session{session_id = NewId,
+                               own_certificate = Cert,
 			       cipher_suite = CipherSuite,
 			       compression_method = Compression},
     Connection:next_event(certify, no_record, State0#state{session = Session}).
@@ -3040,20 +3065,20 @@ handle_sni_extension(Hostname, #state{static_env = #static_env{role = Role} = In
                    fileref_db_handle := FileRefHandle, 
                    session_cache := CacheHandle, 
                    crl_db_info := CRLDbHandle,
-                   private_key := Key,
+                   private_keys := KeyCertMap,
                    dh_params := DHParams,
-                   own_certificate := OwnCert}} =
+                   own_certificates := OwnCerts}} =
                  ssl_config:init(NewOptions, Role),
              State0#state{
-               session = State0#state.session#session{own_certificate = OwnCert},
                static_env = InitStatEnv0#static_env{
-                                        file_ref_db = FileRefHandle,
-                                        cert_db_ref = Ref,
-                                        cert_db = CertDbHandle,
-                                        crl_db = CRLDbHandle,
-                                        session_cache = CacheHandle
+                              file_ref_db = FileRefHandle,
+                              cert_db_ref = Ref,
+                              cert_db = CertDbHandle,
+                              crl_db = CRLDbHandle,
+                              session_cache = CacheHandle
                              },
-               connection_env = CEnv#connection_env{private_key = Key},
+               connection_env = CEnv#connection_env{private_keys = KeyCertMap,
+                                                    certs = OwnCerts},
                ssl_options = NewOptions,
                handshake_env = HsEnv#handshake_env{sni_hostname = Hostname,
                                                    diffie_hellman_params = DHParams}
@@ -3094,3 +3119,18 @@ is_sni_value(Hostname) ->
         _ ->
             true
     end.
+
+get_private_key(Kex, Cert, PrivateKeys) ->
+    case is_anonymous(Kex) of
+        true ->
+            undefined;
+        false ->
+            get_private_key(Cert, PrivateKeys)
+    end.
+
+
+select_client_cert([Cert | _]) ->
+    Cert;
+select_client_cert(_) ->
+    undefined.
+

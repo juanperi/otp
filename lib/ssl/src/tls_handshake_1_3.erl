@@ -558,7 +558,8 @@ do_start(#client_hello{cipher_suites = ClientCiphers,
                                 supported_groups := ServerGroups0,
                                 alpn_preferred_protocols := ALPNPreferredProtocols,
                                 honor_cipher_order := HonorCipherOrder},
-                session = #session{own_certificate = Cert}} = State0) ->
+                session = Session,
+                connection_env = #connection_env{certs = Certs}} = State0) ->
     ClientGroups0 = maps:get(elliptic_curves, Extensions, undefined),
     ClientGroups = get_supported_groups(ClientGroups0),
     ServerGroups = get_supported_groups(ServerGroups0),
@@ -591,8 +592,10 @@ do_start(#client_hello{cipher_suites = ClientCiphers,
         Groups = Maybe(select_common_groups(ServerGroups, ClientGroups)),
         Maybe(validate_client_key_share(ClientGroups, ClientShares)),
 
+        %% TODO  merge select with check!
+        Cert = select_cert(Certs), 
         {PublicKeyAlgo, SignAlgo, SignHash} = get_certificate_params(Cert),
-
+        
         %% Check if client supports signature algorithm of server certificate
         Maybe(check_cert_sign_algo(SignAlgo, SignHash, ClientSignAlgs, ClientSignAlgsCert)),
 
@@ -608,7 +611,7 @@ do_start(#client_hello{cipher_suites = ClientCiphers,
         %% Generate server_share
         KeyShare = ssl_cipher:generate_server_share(Group),
 
-        State1 = update_start_state(State0,
+        State1 = update_start_state(State0#state{session = Session#session{own_certificate = Cert}},
                                     #{cipher => Cipher,
                                       key_share => KeyShare,
                                       session_id => SessionId,
@@ -640,8 +643,6 @@ do_start(#server_hello{cipher_suite = SelectedCipherSuite,
                        session_id = SessionId,
                        extensions = Extensions},
          #state{static_env = #static_env{role = client,
-                                         host = Host,
-                                         port = Port,
                                          transport_cb = Transport,
                                          socket = Socket},
                 handshake_env = #handshake_env{renegotiation = {Renegotiation, _}} = HsEnv,
@@ -651,7 +652,7 @@ do_start(#server_hello{cipher_suite = SelectedCipherSuite,
                                 use_ticket := UseTicket,
                                 session_tickets := SessionTickets,
                                 log_level := LogLevel} = SslOpts,
-                session = #session{own_certificate = Cert} = Session0,
+                session = Session0,
                 connection_states = ConnectionStates0
                } = State0) ->
     ClientGroups = get_supported_groups(ClientGroups0),
@@ -679,9 +680,9 @@ do_start(#server_hello{cipher_suite = SelectedCipherSuite,
         %% of the triggering HelloRetryRequest.
         ClientKeyShare = ssl_cipher:generate_client_shares([SelectedGroup]),
         TicketData = get_ticket_data(self(), SessionTickets, UseTicket),
-        Hello0 = tls_handshake:client_hello(Host, Port, ConnectionStates0, SslOpts,
-                                           SessionId, Renegotiation, Cert, ClientKeyShare,
-                                           TicketData),
+        Hello0 = tls_handshake:client_hello(ConnectionStates0, SslOpts,
+                                           SessionId, Renegotiation, ClientKeyShare,
+                                            TicketData),
 
         %% Update state
         State1 = update_start_state(State0,
@@ -989,8 +990,7 @@ handle_resumption(#state{handshake_env = HSEnv0} = State, _) ->
 maybe_queue_cert_cert_cv(#state{client_certificate_requested = false} = State) ->
     {ok, State};
 maybe_queue_cert_cert_cv(#state{connection_states = _ConnectionStates0,
-                                session = #session{session_id = _SessionId,
-                                                   own_certificate = OwnCert},
+                                session = #session{own_certificate = OwnCert},
                                 ssl_options = #{} = _SslOpts,
                                 key_share = _KeyShare,
                                 handshake_env = #handshake_env{tls_handshake_history = _HHistory0},
@@ -1024,12 +1024,13 @@ maybe_queue_cert_verify(#certificate_1_3{certificate_list = []}, State) ->
     {ok, State};
 maybe_queue_cert_verify(_Certificate,
                         #state{connection_states = _ConnectionStates0,
-                               session = #session{sign_alg = SignatureScheme},
-                               connection_env = #connection_env{private_key = CertPrivateKey},
+                               session = #session{sign_alg = SignatureScheme, own_certificate = OwnCert},
+                               connection_env = #connection_env{private_keys = Keys},
                                static_env = #static_env{role = client}
                               } = State) ->
     {Ref,Maybe} = maybe(),
     try
+        CertPrivateKey = ssl_connection:get_private_key(OwnCert, Keys),
         CertificateVerify = Maybe(certificate_verify(CertPrivateKey, SignatureScheme, State, client)),
         {ok, tls_connection:queue_handshake(CertificateVerify, State)}
     catch
@@ -1116,9 +1117,10 @@ maybe_send_certificate(#state{session = #session{own_certificate = OwnCert},
 
 maybe_send_certificate_verify(State, PSK) when  PSK =/= undefined ->
     {ok, State};
-maybe_send_certificate_verify(#state{session = #session{sign_alg = SignatureScheme},
+maybe_send_certificate_verify(#state{session = #session{sign_alg = SignatureScheme, own_certificate = OwnCert},
                                      connection_env = #connection_env{
-                                                         private_key = CertPrivateKey}} = State, _) ->
+                                                         private_keys = Keys}} = State, _) ->
+    CertPrivateKey = ssl_connection:get_private_key(OwnCert, Keys),
     case certificate_verify(CertPrivateKey, SignatureScheme, State, server) of
         {ok, CertificateVerify} ->
             {ok, tls_connection:queue_handshake(CertificateVerify, State)};
@@ -1153,24 +1155,28 @@ maybe_send_session_ticket(#state{connection_states = ConnectionStates,
     {State, _} = tls_connection:send_handshake(Ticket, State0),
     maybe_send_session_ticket(State, N - 1).
 
-process_certificate_request(#certificate_request_1_3{},
-                            #state{session = #session{own_certificate = undefined}} = State) ->
-    {ok, {State#state{client_certificate_requested = true}, wait_cert}};
+%% process_certificate_request(#certificate_request_1_3{},
+%%                             #state{session = #session{own_certificate = undefined}} = State) ->
+%%     {ok, {State#state{client_certificate_requested = true}, wait_cert}};
 
 process_certificate_request(#certificate_request_1_3{
                               extensions = Extensions},
-                            #state{session = #session{own_certificate = Cert} = Session} = State) ->
+                            #state{session = Session,
+                                   connection_env = #connection_env{certs = Certs}
+                                  } = State) ->    
     ServerSignAlgs = get_signature_scheme_list(
                        maps:get(signature_algs, Extensions, undefined)),
     ServerSignAlgsCert = get_signature_scheme_list(
                            maps:get(signature_algs_cert, Extensions, undefined)),
 
+    Cert = select_cert(Certs),
     {_PublicKeyAlgo, SignAlgo, SignHash} = get_certificate_params(Cert),
 
     %% Check if server supports signature algorithm of client certificate
     case check_cert_sign_algo(SignAlgo, SignHash, ServerSignAlgs, ServerSignAlgsCert) of
         ok ->
-            {ok, {State#state{client_certificate_requested = true}, wait_cert}};
+            {ok, {State#state{client_certificate_requested = true,
+                              session = Session#session{own_certificate = Cert}}, wait_cert}};
         {error, _} ->
             %% Certificate not supported: send empty certificate in state 'wait_finished'
             {ok, {State#state{client_certificate_requested = true,
@@ -2320,3 +2326,11 @@ process_user_tickets([H|T], Acc, N) ->
 %% (see Section 4.6.1), modulo 2^32.
 obfuscate_ticket_age(TicketAge, AgeAdd) ->
     (TicketAge + AgeAdd) rem round(math:pow(2,32)).
+
+
+select_cert(undefined) ->
+    undefined;
+select_cert(Certs) ->
+    hd(Certs).
+    
+    

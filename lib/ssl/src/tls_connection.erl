@@ -575,7 +575,7 @@ init({call, From}, {start, Timeout},
                                      session_cache = Cache,
                                      session_cache_cb = CacheCb},
             handshake_env = #handshake_env{renegotiation = {Renegotiation, _}} = HsEnv,
-            connection_env = CEnv,
+            connection_env = #connection_env{certs = Certs} = CEnv,
 	    ssl_options = #{log_level := LogLevel,
                             %% Use highest version in initial ClientHello.
                             %% Versions is a descending list of supported versions.
@@ -585,14 +585,13 @@ init({call, From}, {start, Timeout},
 	    connection_states = ConnectionStates0
 	   } = State0) ->
     KeyShare = maybe_generate_client_shares(SslOpts),
-    Session = ssl_session:client_select_session({Host, Port, SslOpts}, Cache, CacheCb, NewSession),
+    Session = ssl_session:client_select_session({Host, Port, SslOpts}, Cache, CacheCb, NewSession, Certs),
     %% Update UseTicket in case of automatic session resumption
     {UseTicket, State1} = tls_handshake_1_3:maybe_automatic_session_resumption(State0),
     TicketData = tls_handshake_1_3:get_ticket_data(self(), SessionTickets, UseTicket),
-    Hello = tls_handshake:client_hello(Host, Port, ConnectionStates0, SslOpts,
+    Hello = tls_handshake:client_hello(ConnectionStates0, SslOpts,
                                        Session#session.session_id,
                                        Renegotiation,
-                                       Session#session.own_certificate,
                                        KeyShare,
                                        TicketData),
 
@@ -672,8 +671,8 @@ hello(internal, #client_hello{client_version = ClientVersion} = Hello,
              handshake_env = #handshake_env{kex_algorithm = KeyExAlg,
                                             renegotiation = {Renegotiation, _},
                                             negotiated_protocol = CurrentProtocol} = HsEnv,
-             connection_env = CEnv,
-             session = #session{own_certificate = Cert} = Session0,
+             connection_env = #connection_env{certs = Certs} = CEnv,
+             session = Session0,
 	     ssl_options = SslOpts} = State) ->
 
     case choose_tls_version(SslOpts, Hello) of
@@ -684,7 +683,7 @@ hello(internal, #client_hello{client_version = ClientVersion} = Hello,
             case tls_handshake:hello(Hello,
                                      SslOpts,
                                      {Port, Session0, Cache, CacheCb,
-                                      ConnectionStates0, Cert, KeyExAlg},
+                                      ConnectionStates0, Certs, KeyExAlg},
                                      Renegotiation) of
                 #alert{} = Alert ->
                     ssl_connection:handle_own_alert(Alert, ClientVersion, hello,
@@ -822,16 +821,17 @@ connection(internal, #hello_request{},
                                            session_cache = Cache,
                                            session_cache_cb = CacheCb},
                   handshake_env = #handshake_env{renegotiation = {Renegotiation, peer}},
-		  session = #session{own_certificate = Cert} = Session0,
+                  connection_env = #connection_env{certs = Certs},
+		  session = Session0,
 		  ssl_options = SslOpts, 
                   protocol_specific = #{sender := Pid},
 		  connection_states = ConnectionStates} = State0) ->
     try tls_sender:peer_renegotiate(Pid) of
         {ok, Write} ->
-            Session = ssl_session:client_select_session({Host, Port, SslOpts}, Cache, CacheCb, Session0),
-            Hello = tls_handshake:client_hello(Host, Port, ConnectionStates, SslOpts,
+            Session = ssl_session:client_select_session({Host, Port, SslOpts}, Cache, CacheCb, Session0, Certs),
+            Hello = tls_handshake:client_hello(ConnectionStates, SslOpts,
                                                Session#session.session_id,
-                                               Renegotiation, Cert, undefined,
+                                               Renegotiation, undefined,
                                                undefined),
             {State, Actions} = send_handshake(Hello, State0#state{connection_states = ConnectionStates#{current_write => Write},
                                                                   session = Session}),
@@ -841,15 +841,12 @@ connection(internal, #hello_request{},
                 {stop, {shutdown, sender_blocked}, State0}
         end;
 connection(internal, #hello_request{},
-	   #state{static_env = #static_env{role = client,
-                                           host = Host,
-                                           port = Port},
+	   #state{static_env = #static_env{role = client},
                   handshake_env = #handshake_env{renegotiation = {Renegotiation, _}},
-		  session = #session{own_certificate = Cert},
 		  ssl_options = SslOpts, 
 		  connection_states = ConnectionStates} = State0) ->
-    Hello = tls_handshake:client_hello(Host, Port, ConnectionStates, SslOpts,
-                                       <<>>, Renegotiation, Cert, undefined,
+    Hello = tls_handshake:client_hello(ConnectionStates, SslOpts,
+                                       <<>>, Renegotiation, undefined,
                                        undefined),
 
     {State, Actions} = send_handshake(Hello, State0),

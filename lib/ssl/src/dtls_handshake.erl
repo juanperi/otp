@@ -30,7 +30,7 @@
 -include("ssl_alert.hrl").
 
 %% Handshake handling
--export([client_hello/7, client_hello/8, cookie/4, hello/4, 
+-export([client_hello/4, client_hello/5, cookie/4, hello/4, 
 	 hello_verify_request/2]).
         
 %% Handshake encoding
@@ -46,30 +46,30 @@
 %% Handshake handling
 %%====================================================================
 %%--------------------------------------------------------------------
--spec client_hello(ssl:host(), inet:port_number(), ssl_record:connection_states(),
-		   ssl_options(), binary(), boolean(), der_cert()) ->
+-spec client_hello(ssl_record:connection_states(),
+		   ssl_options(), binary(), boolean()) ->
 			  #client_hello{}.
 %%
 %% Description: Creates a client hello message.
 %%--------------------------------------------------------------------
-client_hello(Host, Port, ConnectionStates, SslOpts,
-	     Id, Renegotiation, OwnCert) ->
+client_hello(ConnectionStates, SslOpts,
+	     Id, Renegotiation) ->
     %% First client hello (two sent in DTLS ) uses empty Cookie
-    client_hello(Host, Port, <<>>, ConnectionStates, SslOpts,
-		 Id, Renegotiation, OwnCert).
+    client_hello(<<>>, ConnectionStates, SslOpts,
+		 Id, Renegotiation).
 
 %%--------------------------------------------------------------------
--spec client_hello(ssl:host(), inet:port_number(), term(), ssl_record:connection_states(),
-		   ssl_options(), binary(),boolean(), der_cert()) ->
+-spec client_hello(term(), ssl_record:connection_states(),
+		   ssl_options(), binary(),boolean()) ->
 			  #client_hello{}.
 %%
 %% Description: Creates a client hello message.
 %%--------------------------------------------------------------------
-client_hello(_Host, _Port, Cookie, ConnectionStates,
+client_hello(Cookie, ConnectionStates,
 	     #{versions := Versions,
                ciphers := UserSuites,
                fallback := Fallback} = SslOpts,
-	     Id, Renegotiation, _OwnCert) ->
+	     Id, Renegotiation) ->
     Version =  dtls_record:highest_protocol_version(Versions),
     Pending = ssl_record:pending_connection_state(ConnectionStates, read),
     SecParams = maps:get(security_parameters, Pending),
@@ -173,7 +173,7 @@ handle_client_hello(Version,
                       signature_algs := SupportedHashSigns,
                       eccs := SupportedECCs,
                       honor_ecc_order := ECCOrder} = SslOpts,
-		    {Port, Session0, Cache, CacheCb, ConnectionStates0, Cert, _}, 
+		    {Port, Session0, Cache, CacheCb, ConnectionStates0, Certs, _}, 
                     Renegotiation) ->
     case dtls_record:is_acceptable_version(Version, Versions) of
 	true ->
@@ -181,13 +181,13 @@ handle_client_hello(Version,
             ClientHashSigns = maps:get(signature_algs, HelloExt, undefined),
 	    TLSVersion = dtls_v1:corresponding_tls_version(Version),
 	    AvailableHashSigns = ssl_handshake:available_signature_algs(
-				   ClientHashSigns, SupportedHashSigns, Cert,TLSVersion),
+				   ClientHashSigns, SupportedHashSigns, Certs, TLSVersion),
 	    ECCCurve = ssl_handshake:select_curve(Curves, SupportedECCs, ECCOrder),
-	    {Type, #session{cipher_suite = CipherSuite} = Session1}
+	    {Type, #session{cipher_suite = CipherSuite, own_certificate = Cert} = Session1}
 		= ssl_handshake:select_session(SugesstedId, CipherSuites, 
                                                AvailableHashSigns, Compressions,
 					       Port, Session0#session{ecc = ECCCurve}, TLSVersion,
-					       SslOpts, Cache, CacheCb, Cert),
+					       SslOpts, Cache, CacheCb, Certs),
 	    case CipherSuite of
 		no_suite ->
 		    ?ALERT_REC(?FATAL, ?INSUFFICIENT_SECURITY);

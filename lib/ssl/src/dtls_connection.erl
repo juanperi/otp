@@ -439,14 +439,14 @@ init({call, From}, {start, Timeout},
                                      session_cache = Cache,
                                      session_cache_cb = CacheCb},
             handshake_env = #handshake_env{renegotiation = {Renegotiation, _}},
-            connection_env = CEnv,
+            connection_env = #connection_env{certs = Certs} =CEnv,
 	    ssl_options = #{versions := Versions} = SslOpts,
-	    session = #session{own_certificate = Cert} = NewSession,
+	    session = NewSession,
 	    connection_states = ConnectionStates0
 	   } = State0) ->
-    Session = ssl_session:client_select_session({Host, Port, SslOpts}, Cache, CacheCb, NewSession), 
-    Hello = dtls_handshake:client_hello(Host, Port, ConnectionStates0, SslOpts,
-					Session#session.session_id, Renegotiation, Cert),
+    Session = ssl_session:client_select_session({Host, Port, SslOpts}, Cache, CacheCb, NewSession, Certs), 
+    Hello = dtls_handshake:client_hello(ConnectionStates0, SslOpts,
+					Session#session.session_id, Renegotiation),
 
     Version = Hello#client_hello.client_version,
     HelloVersion = dtls_record:hello_version(Version, Versions),
@@ -519,18 +519,16 @@ hello(internal, #client_hello{cookie = <<>>,
                                              tls_handshake_history = 
                                                  ssl_handshake:init_handshake_history()}}, 
                Actions);
-hello(internal, #hello_verify_request{cookie = Cookie}, #state{static_env = #static_env{role = client,
-                                                                                        host = Host,
-                                                                                        port = Port},
+hello(internal, #hello_verify_request{cookie = Cookie}, #state{static_env = #static_env{role = client},
                                                                handshake_env = #handshake_env{renegotiation = {Renegotiation, _}} = HsEnv,
                                                                connection_env = CEnv,
 							       ssl_options = SslOpts,
-							       session = #session{own_certificate = Cert, session_id = Id},
+							       session = #session{session_id = Id},
 							       connection_states = ConnectionStates0
 							      } = State0) ->
   
-    Hello = dtls_handshake:client_hello(Host, Port, Cookie, ConnectionStates0,
-					SslOpts, Id, Renegotiation, Cert),
+    Hello = dtls_handshake:client_hello(Cookie, ConnectionStates0,
+					SslOpts, Id, Renegotiation),
     Version = Hello#client_hello.client_version,
     State1 = prepare_flight(State0#state{handshake_env =  
                                              HsEnv#handshake_env{tls_handshake_history 
@@ -697,16 +695,16 @@ connection(internal, #hello_request{}, #state{static_env = #static_env{host = Ho
                                                                        session_cache_cb = CacheCb
                                                                       },
                                               handshake_env = #handshake_env{renegotiation = {Renegotiation, _}},
-                                              connection_env = CEnv,
-                                              session = #session{own_certificate = Cert} = Session0,
+                                              connection_env = #connection_env{certs = Certs} = CEnv,
+                                              session = Session0,
                                               ssl_options = #{versions := Versions} = SslOpts,
                                               connection_states = ConnectionStates0,
                                               protocol_specific = PS
                                              } = State0) ->
     
-    Session = ssl_session:client_select_session({Host, Port, SslOpts}, Cache, CacheCb, Session0),
-    Hello = dtls_handshake:client_hello(Host, Port, ConnectionStates0, SslOpts,
-					Session#session.session_id, Renegotiation, Cert),
+    Session = ssl_session:client_select_session({Host, Port, SslOpts}, Cache, CacheCb, Session0, Certs),
+    Hello = dtls_handshake:client_hello(ConnectionStates0, SslOpts,
+					Session#session.session_id, Renegotiation),
     Version = Hello#client_hello.client_version,
     HelloVersion = dtls_record:hello_version(Version, Versions),
     State1 = prepare_flight(State0),
@@ -878,12 +876,12 @@ handle_client_hello(#client_hello{client_version = ClientVersion} = Hello,
                            handshake_env = #handshake_env{kex_algorithm = KeyExAlg,
                                                           renegotiation = {Renegotiation, _},
                                                           negotiated_protocol = CurrentProtocol} = HsEnv,
-                           connection_env = CEnv,
-			   session = #session{own_certificate = Cert} = Session0,
+                           connection_env = #connection_env{certs = Certs} = CEnv,
+			   session = Session0,
 			   ssl_options = SslOpts} = State0) ->
     
     case dtls_handshake:hello(Hello, SslOpts, {Port, Session0, Cache, CacheCb,
-					       ConnectionStates0, Cert, KeyExAlg}, Renegotiation) of
+					       ConnectionStates0, Certs, KeyExAlg}, Renegotiation) of
 	#alert{} = Alert ->
 	    handle_own_alert(Alert, ClientVersion, hello, State0);
 	{Version, {Type, Session},
