@@ -179,6 +179,10 @@ filter_tls13_algs(Algo) ->
 %%     opaque certificate_request_context<0..2^8-1>;
 %%     CertificateEntry certificate_list<0..2^24-1>;
 %% } Certificate;
+certificate(undefined, _, _, _, client) ->
+      {ok, #certificate_1_3{
+              certificate_request_context = <<>>,
+              certificate_list = []}};
 certificate(OwnCert, CertDbHandle, CertDbRef, _CRContext, Role) ->
     case ssl_certificate:certificate_chain(OwnCert, CertDbHandle, CertDbRef) of
 	{ok, _, Chain} ->
@@ -1155,10 +1159,23 @@ maybe_send_session_ticket(#state{connection_states = ConnectionStates,
     {State, _} = tls_connection:send_handshake(Ticket, State0),
     maybe_send_session_ticket(State, N - 1).
 
-%% process_certificate_request(#certificate_request_1_3{},
-%%                             #state{session = #session{own_certificate = undefined}} = State) ->
-%%     {ok, {State#state{client_certificate_requested = true}, wait_cert}};
-
+process_certificate_request(#certificate_request_1_3{extensions = undefined},
+                            #state{session = Session,
+                                   connection_env = #connection_env{certs = Certs}
+                                  } = State) ->
+    Cert = select_cert(Certs),
+    {ok, {State#state{client_certificate_requested = true,
+                      session = Session#session{own_certificate = Cert}
+                     }, wait_cert}};
+process_certificate_request(#certificate_request_1_3{},
+                            #state{session = Session,
+                                   connection_env = #connection_env{certs = undefined}
+                                  } = State) ->
+    %% We did not have any certs, empty cert will be sent in wait_finished
+    %% Server can choose to accept or fail
+    {ok, {State#state{client_certificate_requested = true,
+                      session = Session#session{own_certificate = undefined}
+                     }, wait_cert}};
 process_certificate_request(#certificate_request_1_3{
                               extensions = Extensions},
                             #state{session = Session,
