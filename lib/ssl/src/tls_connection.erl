@@ -174,10 +174,9 @@ next_record(_, #state{protocol_buffers =
     next_record(State, CipherTexts, ConnectionStates, Check);
 next_record(connection, #state{protocol_buffers = #protocol_buffers{tls_cipher_texts = []},
                                protocol_specific = #{active_n_toggle := true}
-                              } = State) ->
-    %% If ssl application user is not reading data wait to activate socket
+                              } = State) ->        
     flow_ctrl(State); 
-  
+
 next_record(_, #state{protocol_buffers = #protocol_buffers{tls_cipher_texts = []},
                       protocol_specific = #{active_n_toggle := true}
                      } = State) ->
@@ -199,6 +198,12 @@ flow_ctrl(#state{user_data_buffer = {_,Size,_},
                  bytes_to_read = BytesToRead} = State) when (Size >= BytesToRead) andalso
                                                             (BytesToRead > 0) ->
     {no_record, State};
+flow_ctrl(#state{socket_options = #socket_options{active = false},
+                 bytes_to_read = BytesToRead,
+                 user_data_buffer = {_,Size, _}} = State) when (BytesToRead =/= undefined)
+                                                               andalso (BytesToRead =/= 0) -> 
+    io:format("flow_ctrl: BytesToRead: ~p Current Size: ~p~n", [BytesToRead, Size]),
+    activate_socket(State);
 flow_ctrl(State) ->
     activate_socket(State).
 

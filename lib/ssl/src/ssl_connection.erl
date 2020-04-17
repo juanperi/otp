@@ -1379,7 +1379,11 @@ handle_common_event({timeout, handshake}, close, _StateName, #state{start_or_rec
     {stop_and_reply,
      {shutdown, user_timeout},
      {reply, StartFrom, {error, timeout}}, State#state{start_or_recv_from = undefined}};
-handle_common_event({timeout, recv}, timeout, StateName, #state{start_or_recv_from = RecvFrom} = State, _) ->
+handle_common_event({timeout, recv}, timeout, StateName, #state{start_or_recv_from = RecvFrom,
+                                                                bytes_to_read = BytesToRead,
+                                                                user_data_buffer = Buffer
+                                                               } = State, _) ->
+    io:format("State: ~p BytesToRead: ~p Buffer: ~p~n", [StateName, BytesToRead, Buffer]),
     {next_state, StateName, State#state{start_or_recv_from = undefined,
                                         bytes_to_read = undefined}, [{reply, RecvFrom, {error, timeout}}]};
 handle_common_event(internal, {recv, RecvFrom}, StateName, #state{start_or_recv_from = RecvFrom}, _) when
