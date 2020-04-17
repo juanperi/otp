@@ -219,7 +219,10 @@ activate_socket(#state{protocol_specific = #{active_n_toggle := true, active_n :
         _ ->
             self() ! {CloseTag, Socket},
             {no_record, State}
-    end.
+    end;
+activate_socket(State) ->
+    io:format("active_n_toggle not set"),
+    {no_record, State}.
 
 %% Decipher next record and concatenate consecutive ?APPLICATION_DATA records into one
 %%
