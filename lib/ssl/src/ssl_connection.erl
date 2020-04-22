@@ -1381,11 +1381,17 @@ handle_common_event({timeout, handshake}, close, _StateName, #state{start_or_rec
      {reply, StartFrom, {error, timeout}}, State#state{start_or_recv_from = undefined}};
 handle_common_event({timeout, recv}, timeout, StateName, #state{start_or_recv_from = RecvFrom,
                                                                 bytes_to_read = BytesToRead,
-                                                                user_data_buffer = Buffer
+                                                                user_data_buffer = Buffer,
+                                                                static_env = #static_env{socket = Socket},
+                                                                protocol_specific = Map
                                                                } = State, _) ->
-    io:format("State: ~p BytesToRead: ~p Buffer: ~p~n", [StateName, BytesToRead, Buffer]),
+    io:format("State: ~p BytesToRead: ~p Buffer: ~p Receiver ~p ~n", [StateName, BytesToRead, Buffer, RecvFrom]),
+    {ok,[{active, Active}]} = inet:getopts(Socket, [active]),
+    io:format("Socket is active ~p~n", [Active]),
     {next_state, StateName, State#state{start_or_recv_from = undefined,
-                                        bytes_to_read = undefined}, [{reply, RecvFrom, {error, timeout}}]};
+                                        bytes_to_read = undefined,
+                                        protocol_specific = Map#{recv_timed_out => true}
+                                       }, [{reply, RecvFrom, {error, timeout}}]};
 handle_common_event(internal, {recv, RecvFrom}, StateName, #state{start_or_recv_from = RecvFrom}, _) when
       StateName =/= connection ->
     {keep_state_and_data, [postpone]};

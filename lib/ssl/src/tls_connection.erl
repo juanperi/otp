@@ -212,7 +212,13 @@ activate_socket(#state{protocol_specific = #{active_n_toggle := true, active_n :
                        static_env = #static_env{socket = Socket,
                                                 close_tag = CloseTag,
                                                 transport_cb = Transport}  
-                      } = State) ->                                                                                                            
+                      } = State) ->
+    case maps:get(recv_timed_out, ProtocolSpec, false) of 
+        true ->
+            io:format("Activate socket after recv timed out ~n", []);
+        false ->
+            ok
+    end,
     case tls_socket:setopts(Transport, Socket, [{active, N}]) of
         ok ->
             {no_record, State#state{protocol_specific = ProtocolSpec#{active_n_toggle => false}}}; 
@@ -1194,7 +1200,16 @@ tls_handshake_events(Packets) ->
 %% raw data from socket, upack records
 handle_info({Protocol, _, Data}, StateName,
             #state{static_env = #static_env{data_tag = Protocol},
-                   connection_env = #connection_env{negotiated_version = Version}} = State0) ->
+                   connection_env = #connection_env{negotiated_version = Version},
+                   protocol_specific = PS } = State00) ->
+   
+    State0 = case maps:get(recv_timed_out, PS, false) of
+                true ->
+                    io:format("Recived more data from socket after timeout ~n", []),
+                    State00#state{protocol_specific = PS#{recv_timed_out => false}};
+                false ->
+                    State00
+    end,
     case next_tls_record(Data, StateName, State0) of
 	{Record, State} ->
 	    next_event(StateName, Record, State);
