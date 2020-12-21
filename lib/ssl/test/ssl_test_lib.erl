@@ -272,7 +272,7 @@ init_per_group(GroupName, Config0) ->
     case is_protocol_version(GroupName) andalso sufficient_crypto_support(GroupName) of
 	true ->
             Config = clean_protocol_version(Config0),
-	    init_protocol_version(GroupName, Config);
+	    [{version, GroupName}|init_protocol_version(GroupName, Config)];
 	_ ->
 	    case sufficient_crypto_support(GroupName) of
 		true ->
@@ -283,9 +283,10 @@ init_per_group(GroupName, Config0) ->
 	    end
     end.
 
-init_per_group_openssl(GroupName, Config) ->
+init_per_group_openssl(GroupName, Config0) ->
     case is_tls_version(GroupName) andalso sufficient_crypto_support(GroupName) of
 	true ->
+            Config = clean_protocol_version(Config0),
 	    case openssl_tls_version_support(GroupName, Config)
             of
 		true ->
@@ -297,7 +298,7 @@ init_per_group_openssl(GroupName, Config) ->
             case sufficient_crypto_support(GroupName) of
 		true ->
 		    ssl:start(),
-		    Config;
+		    Config0;
 		false ->
 		    {skip, "Missing crypto support"}
 	    end
@@ -2427,7 +2428,7 @@ init_protocol_version(Version, Config) ->
     [{protocol, tls} | NewConfig].
 
 clean_protocol_version(Config) ->
-    proplists:delete(protocol_opts, proplists:delete(protocol, Config)).
+    proplists:delete(version, proplists:delete(protocol_opts, proplists:delete(protocol, Config))).
 
 sufficient_crypto_support(Version)
   when Version == 'tlsv1.3' ->
