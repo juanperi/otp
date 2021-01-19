@@ -33,7 +33,8 @@
          start_link_dist/0]).
 -export([start_child/1,
          start_child_dist/1,
-         session_opts/0]).
+         session_opts/0,
+         sup_name/1]).
 
 %% Supervisor callback
 -export([init/1]).

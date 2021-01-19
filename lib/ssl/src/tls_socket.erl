@@ -269,9 +269,18 @@ session_tickets_tracker(Lifetime, TicketStoreSize, #{erl_dist := false,
                                     anti_replay := AntiReplay}) ->
     tls_server_session_ticket_sup:start_child([Mode, Lifetime, TicketStoreSize, AntiReplay]);
 session_tickets_tracker(Lifetime, TicketStoreSize, #{erl_dist := true,
-                                                     session_tickets := Mode}) ->
-    tls_server_session_ticket_sup:start_child_dist([Mode, Lifetime, TicketStoreSize]).
-
+                                                     session_tickets := Mode,
+                                                     anti_replay := AntiReplay}) ->
+    SupName = tls_server_session_ticket_sup:sup_name(dist),
+    Children = supervisor:count_children(SupName),
+    Workers = proplists:get_value(workers, Children),
+    case Workers of
+        0 ->
+            tls_server_session_ticket_sup:start_child([Mode, Lifetime, TicketStoreSize, AntiReplay]);
+        1 ->
+            [{_,Child,_, _}] = supervisor:which_children(SupName),
+            {ok, Child}
+    end.
 session_id_tracker(#{versions := [{3,4}]}) ->
     {ok, not_relevant};
 %% Regardless of the option reuse_sessions we need the session_id_tracker
@@ -280,7 +289,16 @@ session_id_tracker(#{versions := [{3,4}]}) ->
 session_id_tracker(#{erl_dist := false}) ->
     ssl_server_session_cache_sup:start_child(ssl_server_session_cache_sup:session_opts());
 session_id_tracker(#{erl_dist := true}) ->
-    ssl_server_session_cache_sup:start_child_dist(ssl_server_session_cache_sup:session_opts()).
+    SupName = ssl_server_session_cache_sup:sup_name(dist),
+    Children = supervisor:count_children(SupName),
+    Workers = proplists:get_value(workers, Children),
+    case Workers of
+        0 ->
+            ssl_server_session_cache_sup:start_child_dist(ssl_server_session_cache_sup:session_opts());
+        1 ->
+            [{_,Child,_, _}] = supervisor:which_children(SupName),
+            {ok, Child}
+    end.
 
 get_emulated_opts(TrackerPid) -> 
     call(TrackerPid, get_emulated_opts).
