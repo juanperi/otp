@@ -767,7 +767,7 @@ nodelay() ->
 get_ssl_options(Type) ->
     try ets:lookup(ssl_dist_opts, Type) of
         [{Type, Opts}] ->
-            [{erl_dist, true}, {versions, ['tlsv1.2']} | Opts];
+            [{erl_dist, true} | Opts];
         _ ->
             get_ssl_dist_arguments(Type)
     catch
@@ -778,9 +778,9 @@ get_ssl_options(Type) ->
 get_ssl_dist_arguments(Type) ->
     case init:get_argument(ssl_dist_opt) of
 	{ok, Args} ->
-	    [{erl_dist, true}, {versions, ['tlsv1.2']} | ssl_options(Type, lists:append(Args))];
+	    [{erl_dist, true} | ssl_options(Type, lists:append(Args))];
 	_ ->
-	    [{erl_dist, true}, {versions, ['tlsv1.2']}]
+	    [{erl_dist, true}]
     end.
 
 
