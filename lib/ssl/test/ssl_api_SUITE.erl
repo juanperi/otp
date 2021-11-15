@@ -171,7 +171,11 @@
          invalid_options_tls13/0,
          invalid_options_tls13/1,
          cookie/0,
-         cookie/1
+         cookie/1,
+	 warn_verify_none/0,
+	 warn_verify_none/1,
+	 supress_warn_verify_none/0,
+         supress_warn_verify_none/1
         ]).
 
 %% Apply export
@@ -192,6 +196,7 @@
          tls_close/1,
          no_recv_no_active/1,
          ssl_getstat/1,
+	 format/2,
          %%TODO Keep?
          run_error_server/1,
          run_error_server_close/1,
@@ -292,7 +297,9 @@ gen_api_tests() ->
      invalid_options,
      cb_info,
      log_alert,
-     getstat
+     getstat,
+     warn_verify_none,
+     supress_warn_verify_none	
     ].
 
 handshake_paus_tests() ->
@@ -2485,6 +2492,74 @@ cookie(Config) when is_list(Config) ->
     cookie_extension(Config, true),
     cookie_extension(Config, false).
 
+warn_verify_none() ->
+    [{doc, "Test that verify_none default generates warning."}].
+warn_verify_none(Config) when is_list(Config)->
+    erlang:register(warn_verify_none, self()),
+    LogConfig = #{id => ssl_test_handler,
+    	                formatter => {?MODULE, #{}},
+                        level =>warning},
+    Filter = {fun logger_filters:domain/2,{log,sub,[otp,ssl]}},
+    logger:add_handler(ssl_test_handler, logger_std_h, LogConfig),
+    logger:add_handler_filter(ssl_test_handler, filter_non_ssl, Filter),
+
+    ClientOpts = ssl_test_lib:ssl_options(client_rsa_opts, Config),     
+    ServerOpts = ssl_test_lib:ssl_options(server_rsa_opts, Config),
+
+    {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
+
+    Server = ssl_test_lib:start_server([{node, ServerNode}, {port, 0},
+				 	{from, self()},
+                                        {options, ServerOpts},
+                                        {mfa, {ssl_test_lib, no_result, []}}]),
+    Port = ssl_test_lib:inet_port(Server),
+    Client = ssl_test_lib:start_client([{node, ClientNode}, {port, Port},
+                                        {from, self()},
+                                        {host, Hostname},
+	                                {options, ClientOpts},       
+					{mfa, {ssl_test_lib, no_result, []}}]),
+     receive
+         warning_generated ->
+       	         logger:remove_handler(ssl_test_handler)	
+     after 500 ->
+         logger:remove_handler(ssl_test_handler),	
+         ct:fail(no_warning)
+     end.
+
+supress_warn_verify_none() ->
+    [{doc, "Test that explicit verify_none supresses warning."}].
+supress_warn_verify_none(Config) when is_list(Config)->
+    erlang:register(warn_verify_none, self()),
+    LogConfig = #{id => ssl_test_handler,
+        	        formatter => {?MODULE, #{}},
+                        level =>warning},
+    Filter = {fun logger_filters:domain/2,{log,sub,[otp,ssl]}},
+    logger:add_handler(ssl_test_handler, logger_std_h, LogConfig),
+    logger:add_handler_filter(ssl_test_handler, filter_non_ssl, Filter),
+
+    ClientOpts = ssl_test_lib:ssl_options(client_rsa_opts, Config),     
+    ServerOpts = ssl_test_lib:ssl_options(server_rsa_opts, Config),
+
+    {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),	
+
+    Server = ssl_test_lib:start_server([{node, ServerNode}, {port, 0},	
+				  	    {from, self()},		
+					    {options, ServerOpts},
+					    {mfa, {ssl_test_lib, no_result, []}}]),
+    Port = ssl_test_lib:inet_port(Server),
+    Client = ssl_test_lib:start_client([{node, ClientNode}, {port, Port},
+                                        {from, self()},
+				        {host, Hostname},
+				        {options, ClientOpts},
+			                {mfa, {ssl_test_lib, no_result, []}}]),
+     receive
+         warning_generated ->
+	     logger:remove_handler(ssl_test_handler),
+             ct:fail(no_warning)
+     after 500 ->
+	     logger:remove_handler(ssl_test_handler)
+     end.
+
 %%% Checker functions
 connection_information_result(Socket) ->
     {ok, Info = [_ | _]} = ssl:connection_information(Socket),
@@ -2909,3 +2984,9 @@ ssl_getstat(Socket) ->
         _  ->
             ok
     end.
+
+format({report, #{description :=> Desc}}, _) ->
+     whereis(warn_verify_none) ! warning_generated,
+     Desc.
+     			       
+
