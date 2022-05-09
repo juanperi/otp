@@ -389,27 +389,18 @@ handle_protocol_record(#ssl_tls{type = ?APPLICATION_DATA, fragment = Data}, Stat
             next_event(StateName, Record, State)
     end;
 %%% TLS record protocol level handshake messages 
-handle_protocol_record(#ssl_tls{type = ?HANDSHAKE, fragment = Data}, 
-		    StateName, #state{protocol_buffers =
-					  #protocol_buffers{tls_handshake_buffer = Buf0} = Buffers,
-                                      connection_env = #connection_env{negotiated_version = Version},
-                                      static_env = #static_env{role = Role},
-				      ssl_options = Options} = State0) ->
+handle_protocol_record(#ssl_tls{type = ?HANDSHAKE, fragment = Data}, StateName,
+                       #state{ssl_options = Options, protocol_buffers = Buffers} = State0) ->
     try
-	%% Calculate the effective version that should be used when decoding an incoming handshake
-	%% message.
-	EffectiveVersion = effective_version(Version, Options, Role, StateName),
-        {Packets, Buf} = tls_handshake:get_tls_handshakes(EffectiveVersion,Data,Buf0, Options),
-
-        State = case EffectiveVersion =/= NegotiatedVersion of
-                    State0#state{protocol_buffers =
-                                     Buffers#protocol_buffers{tls_handshake_buffer = Buf}},
+        {Packets, Rest, RecRest} = get_tls_handshakes(Data, StateName, State0),
+            State = State0#state{protocol_buffers = Buffers#protocol_buffers{tls_handshake_buffer = Rest}},
 	case Packets of
             [] -> 
-                assert_buffer_sanity(Buf, Options),
+                #protocol_buffers{tls_handshake_buffer = HSBuffer} = State#state.protocol_buffers,
+                assert_buffer_sanity(HSBuffer, Options),
                 next_event(StateName, no_record, State);
             _ ->                
-                Events = tls_handshake_events(Packets),
+                Events = tls_handshake_events(Packets, RecRest),
                 case StateName of
                     connection ->
                         ssl_gen_statem:hibernate_after(StateName, State, Events);
@@ -529,10 +520,28 @@ protocol_name() ->
 %%====================================================================
 %% Internal functions 
 %%====================================================================	     
-tls_handshake_events(Packets) ->
+get_tls_handshakes(Data, StateName, #state{protocol_buffers = #protocol_buffers{tls_handshake_buffer = HSBuffer},
+                                           connection_env = #connection_env{negotiated_version = Version},
+                                           static_env = #static_env{role = Role},
+                                           ssl_options = Options}) ->
+    case handle_unnegotiated_version(Version, Options, Data, HSBuffer, Role, StateName) of
+        {Packets, Rest} ->
+            {Packets, Rest, <<>>};
+        Other ->
+            Other
+    end.
+
+tls_handshake_events(Packets, <<>>) ->
     lists:map(fun(Packet) ->
-		      {next_event, internal, {handshake, Packet}}
-	      end, Packets).
+                     {next_event, internal, {handshake, Packet}}
+              end, Packets);
+
+tls_handshake_events(Packets, RecRest) ->
+    %% Coalesced TLS record data to be handled after first handshake message has been handled
+    RestEvent = {next_event, internal, #ssl_tls{type = ?HANDSHAKE, fragment = RecRest}},
+    FirstHS = tls_handshake_events(Packets, <<>>),
+    FirstHS ++ [RestEvent].
+
 
 unprocessed_events(Events) ->
     %% The first handshake event will be processed immediately
@@ -756,21 +765,27 @@ next_record_done(#state{protocol_buffers = Buffers} = State, CipherTexts, Connec
 %% Pre TLS-1.3, on the client side, the connection state variable `negotiated_version` will initially be
 %% the requested version. On the server side the same variable is initially undefined.
 %% When the client can support TLS-1.3 and one or more prior versions and we are waiting
-%% for the server hello (with or without a RetryRequest, that is in state hello or in state wait_sh),
-%% the "initial requested version" kept in the connection state variable `negotiated_version`
+%% for the server hello the "initial requested version" kept in the connection state variable `negotiated_version`
 %% (before the versions is actually negotiated) will always be the value of TLS-1.2 (which is a legacy
 %% field in TLS-1.3 client hello). The versions are instead negotiated with an hello extension. When
 %% decoding the server_hello messages we want to go through TLS-1.3 decode functions to be able
 %% to handle TLS-1.3 extensions if TLS-1.3 will be the negotiated version.
-effective_version({3,3} , #{versions := [{3,4} = Version |_]}, client, StateName) when StateName == hello;
-                                                                                       StateName == wait_sh ->
-    Version;
+handle_unnegotiated_version({3,3} , #{versions := [{3,4} = Version |_]} = Options, Data, Buffer, client, hello) ->
+    %% The effective version for decoding the server hello message should be the TLS-1.3. Possible coalesced TLS-1.2
+    %% server handshake messages should be decoded with the negotiated version in later state.
+    <<_:8, ?UINT24(Length), _/binary>> = Data,
+    <<FirstPacket:(Length+4)/binary, Rest/binary>> = Data,
+    {Packet, <<>>} = tls_handshake:get_tls_handshakes(Version, FirstPacket, Buffer, Options),
+    {Packet, <<>>, Rest};
+%% TLS-1.3 RetryRequest
+handle_unnegotiated_version({3,3} , #{versions := [{3,4} = Version |_]} = Options, Data, Buffer, client, wait_sh) ->
+    tls_handshake:get_tls_handshakes(Version, Data, Buffer, Options);
 %% When the `negotiated_version` variable is not yet set use the highest supported version.
-effective_version(undefined, #{versions := [Version|_]}, _, _) ->
-    Version;
+handle_unnegotiated_version(undefined, #{versions := [Version|_]} = Options, Data, Buff, _, _) ->
+    tls_handshake:get_tls_handshakes(Version, Data, Buff, Options);
 %% In all other cases use the version saved in the connection state variable `negotiated_version`
-effective_version(Version, _, _, _) ->
-    Version.
+handle_unnegotiated_version(Version, Options, Data, Buff, _, _) ->
+    tls_handshake:get_tls_handshakes(Version, Data, Buff, Options).
 
 assert_buffer_sanity(<<?BYTE(_Type), ?UINT24(Length), Rest/binary>>, 
                      #{max_handshake_size := Max}) when
